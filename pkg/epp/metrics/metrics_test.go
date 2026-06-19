@@ -618,6 +618,41 @@ func TestRunningRequestsMetrics(t *testing.T) {
 	}
 }
 
+func TestInflightRequestsMetrics(t *testing.T) {
+	Reset()
+	type request struct {
+		modelName   string
+		targetModel string
+		fairnessID  string
+		priority    string
+		complete    bool
+	}
+
+	requests := []request{
+		{modelName: "m1", targetModel: "t1", fairnessID: "tenant-x", priority: "10", complete: false},
+		{modelName: "m1", targetModel: "t1", fairnessID: "tenant-x", priority: "10", complete: false},
+		{modelName: "m1", targetModel: "t1", fairnessID: "tenant-x", priority: "10", complete: true},
+		{modelName: "m2", targetModel: "t2", fairnessID: "tenant-y", priority: "20", complete: false},
+	}
+
+	for _, req := range requests {
+		if req.complete {
+			DecInflightRequests(req.modelName, req.targetModel, req.fairnessID, req.priority)
+		} else {
+			IncInflightRequests(req.modelName, req.targetModel, req.fairnessID, req.priority)
+		}
+	}
+
+	wantInflightRequests, err := os.Open("testdata/llm_d_inflight_requests_metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wantInflightRequests.Close()
+	if err := promtestutil.GatherAndCompare(metrics.Registry, wantInflightRequests, "llm_d_epp_request_inflight"); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestInferencePoolMetrics(t *testing.T) {
 	Reset()
 	scenarios := []struct {

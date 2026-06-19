@@ -127,6 +127,7 @@ type RequestContext struct {
 	ResponseComplete           bool
 	ResponseStatusCode         string
 	RequestRunning             bool
+	RequestInflight            bool
 	Request                    *Request
 	Parser                     fwkrh.Parser
 
@@ -328,6 +329,9 @@ func (s *StreamingServer) Process(srv extProcPb.ExternalProcessor_ProcessServer)
 		if reqCtx.RequestRunning {
 			metrics.DecRunningRequests(reqCtx.IncomingModelName, reqCtx.TargetModelName, fairnessID, priority)
 		}
+		if reqCtx.RequestInflight {
+			metrics.DecInflightRequests(reqCtx.IncomingModelName, reqCtx.TargetModelName, fairnessID, priority)
+		}
 
 		// If we scheduled a pod (TargetPod != nil) but never marked the response  as complete (e.g. error, disconnect,
 		// panic), force the completion hooks to run.
@@ -457,6 +461,8 @@ func (s *StreamingServer) Process(srv extProcPb.ExternalProcessor_ProcessServer)
 				fairnessID, priority := extractFairnessAndPriority(reqCtx)
 				metrics.RecordRequestCounter(reqCtx.IncomingModelName, reqCtx.TargetModelName, fairnessID, reqCtx.Priority)
 				metrics.RecordRequestSizes(reqCtx.IncomingModelName, reqCtx.TargetModelName, fairnessID, priority, reqCtx.RequestSize)
+				metrics.IncInflightRequests(reqCtx.IncomingModelName, reqCtx.TargetModelName, fairnessID, priority)
+				reqCtx.RequestInflight = true
 
 				if parseResult.SkipResponseProcessing {
 					reqCtx.RequestState = RequestResponseProcessingSkipped

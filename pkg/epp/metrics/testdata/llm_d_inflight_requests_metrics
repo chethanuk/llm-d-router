@@ -1,0 +1,4 @@
+# HELP llm_d_epp_request_inflight [ALPHA] Current number of in-flight requests in the endpoint picker (admitted, not yet completed).
+# TYPE llm_d_epp_request_inflight gauge
+llm_d_epp_request_inflight{fairness_id="tenant-x",model_name="m1",priority="10",target_model_name="t1"} 1
+llm_d_epp_request_inflight{fairness_id="tenant-y",model_name="m2",priority="20",target_model_name="t2"} 1

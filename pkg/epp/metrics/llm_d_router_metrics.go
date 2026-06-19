@@ -128,6 +128,15 @@ var (
 		modelLabelsWithFairnessPriority,
 	)
 
+	llmdInflightRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "request_inflight",
+			Help:      metricsutil.HelpMsgWithStability("Current number of in-flight requests in the endpoint picker (admitted, not yet completed).", compbasemetrics.ALPHA),
+		},
+		modelLabelsWithFairnessPriority,
+	)
+
 	llmdNormalizedTimePerOutputToken = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Subsystem: LLMDRouterEndpointPickerSubsystem,

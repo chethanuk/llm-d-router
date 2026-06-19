@@ -436,6 +436,7 @@ func Register(customCollectors ...prometheus.Collector) {
 		metrics.Registry.MustRegister(llmdPromptCachedTokens)
 		metrics.Registry.MustRegister(runningRequests)
 		metrics.Registry.MustRegister(llmdRunningRequests)
+		metrics.Registry.MustRegister(llmdInflightRequests)
 		metrics.Registry.MustRegister(normalizedTimePerOutputToken)
 		metrics.Registry.MustRegister(llmdNormalizedTimePerOutputToken)
 		metrics.Registry.MustRegister(llmdRequestTTFT)
@@ -502,6 +503,7 @@ func Reset() {
 	llmdPromptCachedTokens.Reset()
 	runningRequests.Reset()
 	llmdRunningRequests.Reset()
+	llmdInflightRequests.Reset()
 	normalizedTimePerOutputToken.Reset()
 	llmdNormalizedTimePerOutputToken.Reset()
 	llmdRequestTTFT.Reset()
@@ -686,6 +688,20 @@ func DecRunningRequests(modelName, targetModelName, fairnessID, priority string)
 	if modelName != "" {
 		runningRequests.WithLabelValues(modelName).Dec()
 		llmdRunningRequests.WithLabelValues(modelName, targetModelName, fairnessID, priority).Dec()
+	}
+}
+
+// IncInflightRequests increases the current in-flight requests.
+func IncInflightRequests(modelName, targetModelName, fairnessID, priority string) {
+	if modelName != "" {
+		llmdInflightRequests.WithLabelValues(modelName, targetModelName, fairnessID, priority).Inc()
+	}
+}
+
+// DecInflightRequests decreases the current in-flight requests.
+func DecInflightRequests(modelName, targetModelName, fairnessID, priority string) {
+	if modelName != "" {
+		llmdInflightRequests.WithLabelValues(modelName, targetModelName, fairnessID, priority).Dec()
 	}
 }
 
