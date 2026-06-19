@@ -31,6 +31,8 @@ import (
 // newProxyTransport must inject W3C trace context into outbound requests so that
 // EPP -> routing-proxy -> vLLM share a single trace.
 func TestNewProxyTransportInjectsTraceContext(t *testing.T) {
+	prevPropagator := otel.GetTextMapPropagator()
+	t.Cleanup(func() { otel.SetTextMapPropagator(prevPropagator) })
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 
 	var gotTraceparent string

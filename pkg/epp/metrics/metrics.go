@@ -691,14 +691,16 @@ func DecRunningRequests(modelName, targetModelName, fairnessID, priority string)
 	}
 }
 
-// IncInflightRequests increases the current in-flight requests.
+// IncInflightRequests marks a request as in flight: admitted to the endpoint picker but not yet
+// completed. Counted separately from running requests, which track only dispatched requests.
 func IncInflightRequests(modelName, targetModelName, fairnessID, priority string) {
 	if modelName != "" {
 		llmdInflightRequests.WithLabelValues(modelName, targetModelName, fairnessID, priority).Inc()
 	}
 }
 
-// DecInflightRequests decreases the current in-flight requests.
+// DecInflightRequests records that an in-flight request left the endpoint picker (completed,
+// errored, or disconnected); paired with IncInflightRequests.
 func DecInflightRequests(modelName, targetModelName, fairnessID, priority string) {
 	if modelName != "" {
 		llmdInflightRequests.WithLabelValues(modelName, targetModelName, fairnessID, priority).Dec()
