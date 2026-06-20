@@ -68,3 +68,31 @@ Three metrics covering ext_proc gRPC stream lifecycle. Disabled by default; enab
 *   **Release Stage:** ALPHA
 *   **Description:** Total ext_proc gRPC streams completed, by gRPC status code.
 *   **Usage:** Rate of `code="OK"` is the healthy stream-completion rate. A rising rate of `code="Internal"` or `code="Unknown"` indicates handler errors. `code="Canceled"` is expected on Envoy restarts and rolling EPP updates.
+
+## In-flight load metrics
+
+Per-endpoint in-flight load, emitted under the `llm_d_epp_` prefix. Present only when an
+`InFlightLoadProducer` is configured; the producer self-registers a collector that reads its live
+per-endpoint counters (the same source as the `/debug/plugins/state` dump and the token-load scorer).
+
+### `inflight_requests`
+
+*   **Type:** Gauge
+*   **Labels:**
+    *   `endpoint_name`: string — the target endpoint (pod) name.
+    *   `namespace`: string — the endpoint's namespace.
+    *   `producer_name`: string — the configured `InFlightLoadProducer` instance name, so multiple producers emit distinct series.
+*   **Release Stage:** ALPHA
+*   **Description:** Requests currently in flight on each endpoint (scheduled, not yet completed), as tracked by the in-flight load producer.
+*   **Usage:** Per-replica queue depth for load-aware routing and capacity analysis. Unlike the per-model `request_inflight` gauge (admitted-but-not-completed, aggregated by model), this is broken down by endpoint so it shows which replica is loaded.
+
+### `inflight_tokens`
+
+*   **Type:** Gauge
+*   **Labels:**
+    *   `endpoint_name`: string — the target endpoint (pod) name.
+    *   `namespace`: string — the endpoint's namespace.
+    *   `producer_name`: string — the configured `InFlightLoadProducer` instance name.
+*   **Release Stage:** ALPHA
+*   **Description:** Tokens currently in flight on each endpoint — uncached prompt tokens, optionally plus estimated output tokens when the producer's `addEstimatedOutputTokens` is set.
+*   **Usage:** Per-replica token pressure, a finer load signal than request count when request sizes vary widely.
