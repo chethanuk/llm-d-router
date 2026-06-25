@@ -27,6 +27,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr/funcr"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
+
 	"github.com/llm-d/coordinator/pkg/config"
 )
 
@@ -170,11 +175,10 @@ func TestRedactBody(t *testing.T) {
 	})
 }
 
-// Request buffers the upstream response body so the caller can read it after the
-// connection closes, and rewraps it as a fresh ReadCloser. This round-trip pins
-// that contract: the returned body is fully readable and carries the upstream
-// status.
-func TestClient_RequestBuffersResponseBody(t *testing.T) {
+// Request returns a readable body regardless of log level: buffered only at
+// TRACE, otherwise the unread stream. This round-trip pins that contract: the
+// returned body is fully readable and carries the upstream status.
+func TestClient_RequestReturnsReadableBody(t *testing.T) {
 	const want = `{"ok":true}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(ContentTypeHeader) != ContentTypeJSON {
@@ -198,20 +202,58 @@ func TestClient_RequestBuffersResponseBody(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusCreated)
 	}
-	// Pin the buffering contract: the streaming transport body is replaced with
-	// an in-memory io.NopCloser(bytes.NewReader(...)). Comparing dynamic types
-	// fails if Request ever returns the original resp.Body instead.
-	wantType := reflect.TypeOf(io.NopCloser(bytes.NewReader(nil)))
-	if got := reflect.TypeOf(resp.Body); got != wantType {
-		t.Errorf("resp.Body type = %v, want buffered %v", got, wantType)
-	}
 	got, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("reading buffered body: %v", err)
+		t.Fatalf("reading body: %v", err)
 	}
 	if string(got) != want {
 		t.Errorf("body = %q, want %q", got, want)
 	}
+}
+
+// At TRACE the body is buffered into an in-memory reader so it can be logged
+// and still handed to the caller; with TRACE off it is left unread to avoid
+// holding large prefill/encode responses in memory.
+func TestClient_RequestBuffersBodyOnlyAtTrace(t *testing.T) {
+	const want = `{"ok":true}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, want)
+	}))
+	defer srv.Close()
+
+	c := New(config.GatewayConfig{Address: srv.URL})
+	bufferedType := reflect.TypeOf(io.NopCloser(bytes.NewReader(nil)))
+
+	t.Run("trace off leaves body unread", func(t *testing.T) {
+		resp, err := c.Post(context.Background(), "/v1/chat/completions", []byte(`{"q":1}`), nil)
+		if err != nil {
+			t.Fatalf("Post: %v", err)
+		}
+		defer resp.Body.Close()
+		if got := reflect.TypeOf(resp.Body); got == bufferedType {
+			t.Errorf("resp.Body buffered with trace off, type = %v", got)
+		}
+	})
+
+	t.Run("trace on buffers body", func(t *testing.T) {
+		logger := funcr.NewJSON(func(string) {}, funcr.Options{Verbosity: logutil.TRACE})
+		ctx := log.IntoContext(context.Background(), logger)
+		resp, err := c.Post(ctx, "/v1/chat/completions", []byte(`{"q":1}`), nil)
+		if err != nil {
+			t.Fatalf("Post: %v", err)
+		}
+		defer resp.Body.Close()
+		if got := reflect.TypeOf(resp.Body); got != bufferedType {
+			t.Errorf("resp.Body type = %v, want buffered %v", got, bufferedType)
+		}
+		got, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("reading buffered body: %v", err)
+		}
+		if string(got) != want {
+			t.Errorf("body = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestClient_BaseURLAndTransport(t *testing.T) {
