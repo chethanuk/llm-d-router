@@ -26,6 +26,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 
@@ -77,11 +78,14 @@ type FileDiscovery struct {
 	// reload to compute which endpoints to delete from the datastore.
 	endpoints map[types.NamespacedName]struct{}
 
+	mu sync.RWMutex // guards endpoints
+
 	ready     chan struct{}
 	readyOnce sync.Once
 }
 
 var _ fwkdl.EndpointDiscovery = (*FileDiscovery)(nil)
+var _ fwkplugin.StateDumper = (*FileDiscovery)(nil)
 
 // Factory is the plugin factory for file-discovery.
 func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
@@ -222,11 +226,68 @@ func (f *FileDiscovery) load(notifier fwkdl.DiscoveryNotifier) error {
 		notifier.Upsert(meta)
 	}
 
-	for id := range f.endpoints {
+	f.mu.Lock()
+	old := f.endpoints
+	f.endpoints = incoming
+	f.mu.Unlock()
+
+	for id := range old {
 		if _, ok := incoming[id]; !ok {
 			notifier.Delete(id)
 		}
 	}
-	f.endpoints = incoming
 	return errors.Join(errs...)
+}
+
+const maxDebugDumpEndpoints = 100
+
+type fileDiscoveryState struct {
+	Path           string   `json:"path"`
+	WatchFile      bool     `json:"watchFile"`
+	Ready          bool     `json:"ready"`
+	Endpoints      []string `json:"endpoints"`
+	TotalEndpoints int      `json:"totalEndpoints"`
+	MaxEndpoints   int      `json:"maxEndpoints"`
+	Truncated      bool     `json:"truncated"`
+}
+
+// DumpState implements [fwkplugin.StateDumper] and exposes the applied
+// endpoint identity set from the last successful load for the
+// /debug/plugins/state endpoint. The list is sorted and capped to keep the
+// debug payload bounded; endpoint addresses, ports, and labels are omitted.
+func (f *FileDiscovery) DumpState() (json.RawMessage, error) {
+	return json.Marshal(f.snapshotState())
+}
+
+func (f *FileDiscovery) snapshotState() fileDiscoveryState {
+	ready := false
+	select {
+	case <-f.ready:
+		ready = true
+	default:
+	}
+
+	f.mu.RLock()
+	ids := make([]string, 0, len(f.endpoints))
+	for id := range f.endpoints {
+		ids = append(ids, id.String())
+	}
+	total := len(f.endpoints)
+	f.mu.RUnlock()
+
+	sort.Strings(ids)
+
+	state := fileDiscoveryState{
+		Path:           f.path,
+		WatchFile:      f.watchFile,
+		Ready:          ready,
+		Endpoints:      ids,
+		TotalEndpoints: total,
+		MaxEndpoints:   maxDebugDumpEndpoints,
+	}
+	if len(state.Endpoints) > maxDebugDumpEndpoints {
+		state.Endpoints = state.Endpoints[:maxDebugDumpEndpoints]
+		state.Truncated = true
+	}
+	return state
 }

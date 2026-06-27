@@ -19,7 +19,9 @@ package file
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -291,4 +293,122 @@ endpoints:
 
 	cancel()
 	assert.NoError(t, <-done)
+}
+
+func TestDumpState(t *testing.T) {
+	tests := []struct {
+		name   string
+		build  func(t *testing.T) *FileDiscovery
+		assert func(t *testing.T, s fileDiscoveryState)
+	}{
+		{
+			name: "populated",
+			build: func(t *testing.T) *FileDiscovery {
+				fd := newFD(writeTemp(t, validYAML), false)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				require.NoError(t, fd.Start(ctx, &recordingNotifier{}))
+				return fd
+			},
+			assert: func(t *testing.T, s fileDiscoveryState) {
+				assert.Equal(t, []string{"default/ep2", "ns1/ep1"}, s.Endpoints)
+				assert.Equal(t, 2, s.TotalEndpoints)
+				assert.Equal(t, maxDebugDumpEndpoints, s.MaxEndpoints)
+				assert.False(t, s.Truncated)
+				assert.True(t, s.Ready)
+				assert.False(t, s.WatchFile)
+				assert.NotEmpty(t, s.Path)
+			},
+		},
+		{
+			name:  "empty",
+			build: func(t *testing.T) *FileDiscovery { return newFD("/x.yaml", false) },
+			assert: func(t *testing.T, s fileDiscoveryState) {
+				assert.Empty(t, s.Endpoints)
+				assert.Equal(t, 0, s.TotalEndpoints)
+				assert.False(t, s.Truncated)
+				assert.False(t, s.Ready)
+			},
+		},
+		{
+			name:  "watch_enabled",
+			build: func(t *testing.T) *FileDiscovery { return newFD("/x.yaml", true) },
+			assert: func(t *testing.T, s fileDiscoveryState) {
+				assert.True(t, s.WatchFile)
+			},
+		},
+		{
+			name: "bounded_truncates",
+			build: func(t *testing.T) *FileDiscovery {
+				fd := newFD("/x.yaml", false)
+				for i := 0; i < maxDebugDumpEndpoints+50; i++ {
+					fd.endpoints[types.NamespacedName{
+						Namespace: "ns",
+						Name:      fmt.Sprintf("ep-%04d", i),
+					}] = struct{}{}
+				}
+				return fd
+			},
+			assert: func(t *testing.T, s fileDiscoveryState) {
+				assert.Len(t, s.Endpoints, maxDebugDumpEndpoints)
+				assert.Equal(t, maxDebugDumpEndpoints+50, s.TotalEndpoints)
+				assert.True(t, s.Truncated)
+				assert.True(t, sort.StringsAreSorted(s.Endpoints))
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := tc.build(t)
+			raw, err := fd.DumpState()
+			require.NoError(t, err)
+			require.True(t, json.Valid(raw))
+			var s fileDiscoveryState
+			require.NoError(t, json.Unmarshal(raw, &s))
+			tc.assert(t, s)
+		})
+	}
+}
+
+// TestDumpState_ConcurrentReload proves the endpoints mutex is necessary: load()
+// (the reload goroutine) and DumpState() (the HTTP handler goroutine) run
+// concurrently against the same map. It must pass under -race.
+func TestDumpState_ConcurrentReload(t *testing.T) {
+	fd := newFD(writeTemp(t, validYAML), false)
+	notifier := &recordingNotifier{}
+	// Seed once so there is a map to read while reloads swap it.
+	require.NoError(t, fd.load(notifier))
+
+	var wg sync.WaitGroup
+	const iterations = 200
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if err := fd.load(notifier); err != nil {
+				t.Errorf("load: %v", err)
+				return
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			raw, err := fd.DumpState()
+			if err != nil {
+				t.Errorf("DumpState: %v", err)
+				return
+			}
+			if !json.Valid(raw) {
+				t.Errorf("DumpState returned invalid JSON")
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
 }
