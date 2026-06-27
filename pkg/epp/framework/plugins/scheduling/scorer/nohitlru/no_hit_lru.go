@@ -27,12 +27,17 @@ const (
 	// This is currently hardcoded until we have a defined proper config interface.
 	// (See also https://github.com/kubernetes-sigs/gateway-api-inference-extension/pull/2104/	)
 	defaultPrefillProfile = "prefill"
+
+	// maxDebugDumpEntries caps the number of LRU entries emitted by DumpState so the
+	// /debug/plugins/state payload stays bounded on large deployments.
+	maxDebugDumpEntries = 100
 )
 
 // compile-time type assertions
 var _ scheduling.Scorer = &NoHitLRU{}
 var _ requestcontrol.PreRequest = &NoHitLRU{}
 var _ plugin.ConsumerPlugin = &NoHitLRU{}
+var _ plugin.StateDumper = &NoHitLRU{}
 
 // Parameters defines the parameters for the NoHitLRU scorer.
 type Parameters struct {
@@ -115,6 +120,48 @@ type NoHitLRU struct {
 // TypedName returns the typed name of the plugin.
 func (s *NoHitLRU) TypedName() plugin.TypedName {
 	return s.typedName
+}
+
+// noHitLRUState is the sanitized, bounded snapshot emitted by DumpState.
+type noHitLRUState struct {
+	// Endpoints in LRU recency order, oldest (least recently used) first.
+	// Index 0 is the endpoint the scorer currently favors most for cold requests.
+	Endpoints    []string `json:"endpoints"`
+	TotalEntries int      `json:"totalEntries"`
+	MaxEntries   int      `json:"maxEntries"`
+	Truncated    bool     `json:"truncated"`
+}
+
+// DumpState implements [plugin.StateDumper] and exposes the LRU recency order of
+// endpoints that have served cold (cache-miss) requests for the
+// /debug/plugins/state endpoint.
+//
+// Endpoints are listed oldest-first (least recently used first), which is the
+// order the scorer applies when ranking candidates for a cold request. The list
+// is capped to keep the debug payload bounded when the LRU is large.
+func (s *NoHitLRU) DumpState() (json.RawMessage, error) {
+	return json.Marshal(s.snapshotState())
+}
+
+func (s *NoHitLRU) snapshotState() noHitLRUState {
+	var keys []string
+	if s.lruCache != nil {
+		keys = s.lruCache.Keys()
+	}
+
+	state := noHitLRUState{
+		Endpoints:    keys,
+		TotalEntries: len(keys),
+		MaxEntries:   maxDebugDumpEntries,
+	}
+	if len(state.Endpoints) > maxDebugDumpEntries {
+		state.Endpoints = state.Endpoints[:maxDebugDumpEntries]
+		state.Truncated = true
+	}
+	if state.Endpoints == nil {
+		state.Endpoints = []string{}
+	}
+	return state
 }
 
 // Category returns the preference the scorer applies when scoring candidate endpoints.
