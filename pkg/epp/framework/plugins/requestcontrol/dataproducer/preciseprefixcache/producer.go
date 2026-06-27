@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
@@ -46,6 +47,10 @@ import (
 // PluginType is the registered type name of the precise-prefix-cache-producer.
 const PluginType = "precise-prefix-cache-producer"
 
+// maxDebugDumpSubscribers caps the subscriber list emitted by DumpState so the
+// /debug/plugins/state payload stays bounded when a deployment has many pods.
+const maxDebugDumpSubscribers = 100
+
 // PluginConfig configures the precise-prefix-cache-producer. Nested fields
 // mirror the llm-d-kv-cache configuration shape (see that repo's
 // docs/configuration.md for details on TokenProcessorConfig, IndexerConfig,
@@ -65,6 +70,62 @@ type PluginConfig struct {
 }
 
 var _ requestcontrol.DataProducer = &Producer{}
+var _ plugin.StateDumper = &Producer{}
+
+type preciseState struct {
+	BlockSizeTokens      int      `json:"blockSizeTokens"`
+	PodDiscoveryEnabled  bool     `json:"podDiscoveryEnabled"`
+	Subscribers          []string `json:"subscribers"`
+	TotalSubscribers     int      `json:"totalSubscribers"`
+	MaxSubscribers       int      `json:"maxSubscribers"`
+	SubscribersTruncated bool     `json:"subscribersTruncated"`
+	SpeculativeEnabled   bool     `json:"speculativeEnabled"`
+	SpeculativeEntries   int      `json:"speculativeEntries"`
+}
+
+// DumpState implements [plugin.StateDumper], exposing the active KV-event
+// subscriber set, speculative-cache occupancy, and config shape for the
+// /debug/plugins/state endpoint.
+//
+// The underlying kvblock.Index exposes no enumeration API, so its contents
+// (cached blocks, pod mappings) cannot be dumped. The subscriber list and
+// speculative count are read through their owners' own locks, so the
+// snapshot is best-effort point-in-time, not a single atomic instant. This
+// is acceptable for a debug endpoint.
+//
+// The subscriber list is sorted and capped to keep the payload bounded when
+// a deployment has a large pod set.
+func (p *Producer) DumpState() (json.RawMessage, error) {
+	return json.Marshal(p.snapshotState())
+}
+
+func (p *Producer) snapshotState() preciseState {
+	state := preciseState{
+		BlockSizeTokens:    p.blockSizeTokens,
+		SpeculativeEnabled: p.speculativeEnabled,
+		MaxSubscribers:     maxDebugDumpSubscribers,
+		Subscribers:        []string{},
+	}
+	if p.kvEventsConfig != nil {
+		state.PodDiscoveryEnabled = p.kvEventsConfig.DiscoverPods
+	}
+	if p.subscribersManager != nil {
+		ids, _ := p.subscribersManager.GetActiveSubscribers()
+		state.TotalSubscribers = len(ids)
+		sort.Strings(ids)
+		if len(ids) > maxDebugDumpSubscribers {
+			ids = ids[:maxDebugDumpSubscribers]
+			state.SubscribersTruncated = true
+		}
+		if len(ids) > 0 {
+			state.Subscribers = ids
+		}
+	}
+	if p.speculativeCache != nil {
+		state.SpeculativeEntries = p.speculativeCache.Len()
+	}
+	return state
+}
 
 // Producer is a DataProducer plugin that maintains a KV-block prefix-cache
 // index by subscribing to vLLM KV-events and writes per-endpoint
