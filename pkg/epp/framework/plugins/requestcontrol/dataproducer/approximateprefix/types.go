@@ -31,6 +31,7 @@ type indexerInterface interface {
 	Add(hashes []blockHash, server server)
 	RemovePod(server ServerID)
 	Pods() []ServerID
+	snapshot() indexerSnapshot
 }
 
 // podSet holds a set of pods that may have a specific prefix hash.

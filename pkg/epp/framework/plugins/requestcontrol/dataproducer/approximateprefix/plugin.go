@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -52,7 +53,69 @@ var minBlockSizeTokens = 64
 var (
 	_ requestcontrol.DataProducer = &dataProducer{}
 	_ requestcontrol.PreRequest   = &dataProducer{}
+	_ plugin.StateDumper          = &dataProducer{}
 )
+
+// maxDebugDumpPods caps the per-pod breakdown in DumpState so the debug payload
+// stays bounded when many pods are tracked.
+const maxDebugDumpPods = 100
+
+type prefixCacheState struct {
+	BlockSizeTokens   int             `json:"blockSizeTokens"`
+	AutoTune          bool            `json:"autoTune"`
+	LRUCapacityPerPod int             `json:"lruCapacityPerPod"`
+	Blocks            int             `json:"blocks"`
+	TotalPodEntries   int             `json:"totalPodEntries"`
+	TotalPods         int             `json:"totalPods"`
+	MaxPods           int             `json:"maxPods"`
+	Truncated         bool            `json:"truncated"`
+	Pods              []podCacheState `json:"pods"`
+}
+
+type podCacheState struct {
+	Pod     string `json:"pod"`
+	Entries int    `json:"entries"`
+}
+
+// DumpState implements [plugin.StateDumper] and exposes a bounded, sanitized
+// snapshot of the approximate prefix-cache index for /debug/plugins/state.
+// Only counts and non-sensitive config are emitted; block hashes and
+// per-request prefix state are never dumped (they derive from prompt content
+// and are high-cardinality). The per-pod breakdown is capped to the busiest
+// pods to keep the payload bounded.
+func (p *dataProducer) DumpState() (json.RawMessage, error) {
+	return json.Marshal(p.snapshotState())
+}
+
+func (p *dataProducer) snapshotState() prefixCacheState {
+	snap := p.indexerInst.snapshot()
+
+	state := prefixCacheState{
+		BlockSizeTokens:   p.config.BlockSizeTokens,
+		AutoTune:          p.config.AutoTune,
+		LRUCapacityPerPod: snap.LRUCapacityPerPod,
+		Blocks:            snap.Blocks,
+		TotalPods:         len(snap.PodEntries),
+		MaxPods:           maxDebugDumpPods,
+		Pods:              make([]podCacheState, 0, len(snap.PodEntries)),
+	}
+	for pod, entries := range snap.PodEntries {
+		state.TotalPodEntries += entries
+		state.Pods = append(state.Pods, podCacheState{Pod: pod.String(), Entries: entries})
+	}
+
+	sort.SliceStable(state.Pods, func(i, j int) bool {
+		if state.Pods[i].Entries != state.Pods[j].Entries {
+			return state.Pods[i].Entries > state.Pods[j].Entries
+		}
+		return state.Pods[i].Pod < state.Pods[j].Pod
+	})
+	if len(state.Pods) > maxDebugDumpPods {
+		state.Pods = state.Pods[:maxDebugDumpPods]
+		state.Truncated = true
+	}
+	return state
+}
 
 // dataProducer is a plugin that produces data consumed by approx prefix cache aware scheduling.
 type dataProducer struct {
