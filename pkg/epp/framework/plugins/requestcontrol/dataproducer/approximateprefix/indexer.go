@@ -195,3 +195,26 @@ func (i *indexer) Pods() []ServerID {
 	}
 	return pods
 }
+
+// indexerSnapshot is a point-in-time, lock-consistent read of the index.
+type indexerSnapshot struct {
+	Blocks            int              // distinct indexed block hashes (len of hashToPods)
+	LRUCapacityPerPod int              // per-pod LRU capacity (defaultLRUSize)
+	PodEntries        map[ServerID]int // current LRU entry count per tracked pod
+}
+
+// snapshot returns a bounded, lock-consistent view of the index for debug dumps.
+func (i *indexer) snapshot() indexerSnapshot {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+
+	podEntries := make(map[ServerID]int, len(i.podToLRU))
+	for pod, c := range i.podToLRU {
+		podEntries[pod] = c.Len()
+	}
+	return indexerSnapshot{
+		Blocks:            len(i.hashToPods),
+		LRUCapacityPerPod: i.defaultLRUSize,
+		PodEntries:        podEntries,
+	}
+}

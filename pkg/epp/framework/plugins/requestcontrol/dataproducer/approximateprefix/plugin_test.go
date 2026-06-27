@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
@@ -831,4 +832,138 @@ func TestPrefixPluginMatchesSameTokens(t *testing.T) {
 	state2, _ := plugin.ReadPluginStateKey[*SchedulingContextState](p.PluginState(), req2.RequestID, plugin.StateKey(ApproxPrefixCachePluginType))
 
 	assert.Equal(t, state1.PerPromptHashes, state2.PerPromptHashes, "identical token IDs must produce identical hashes")
+}
+
+func newDumpStateIndexer(t *testing.T, capacity int) *indexer {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return newIndexer(ctx, capacity, "approx-prefix-cache-producer", ApproxPrefixCachePluginType).(*indexer)
+}
+
+func newDumpStateProducer(cfg config, idx indexerInterface) *dataProducer {
+	return &dataProducer{
+		typedName:   plugin.TypedName{Type: ApproxPrefixCachePluginType, Name: "approx-prefix-cache-producer"},
+		config:      cfg,
+		indexerInst: idx,
+	}
+}
+
+func dumpSrv(name string) server {
+	return server{ServerID: ServerID(k8stypes.NamespacedName{Namespace: "default", Name: name})}
+}
+
+func TestDataProducer_DumpState(t *testing.T) {
+	cfg := config{BlockSizeTokens: 64, AutoTune: true}
+
+	tests := []struct {
+		name  string
+		seed  func(idx *indexer)
+		check func(t *testing.T, got prefixCacheState)
+	}{
+		{
+			name: "empty",
+			seed: func(*indexer) {},
+			check: func(t *testing.T, got prefixCacheState) {
+				require.Equal(t, prefixCacheState{
+					BlockSizeTokens:   64,
+					AutoTune:          true,
+					LRUCapacityPerPod: 4096,
+					Blocks:            0,
+					TotalPodEntries:   0,
+					TotalPods:         0,
+					MaxPods:           maxDebugDumpPods,
+					Truncated:         false,
+					Pods:              []podCacheState{},
+				}, got)
+			},
+		},
+		{
+			name: "populated two pods busiest first",
+			seed: func(idx *indexer) {
+				idx.Add([]blockHash{1, 2}, dumpSrv("pod-a"))
+				idx.Add([]blockHash{3}, dumpSrv("pod-b"))
+			},
+			check: func(t *testing.T, got prefixCacheState) {
+				require.Equal(t, 3, got.Blocks)
+				require.Equal(t, 2, got.TotalPods)
+				require.Equal(t, 3, got.TotalPodEntries)
+				require.Equal(t, []podCacheState{
+					{Pod: "default/pod-a", Entries: 2},
+					{Pod: "default/pod-b", Entries: 1},
+				}, got.Pods)
+				require.False(t, got.Truncated)
+			},
+		},
+		{
+			name: "shared block counted once in blocks",
+			seed: func(idx *indexer) {
+				idx.Add([]blockHash{1}, dumpSrv("pod-a"))
+				idx.Add([]blockHash{1}, dumpSrv("pod-b"))
+			},
+			check: func(t *testing.T, got prefixCacheState) {
+				require.Equal(t, 1, got.Blocks)
+				require.Equal(t, 2, got.TotalPods)
+				require.Equal(t, 2, got.TotalPodEntries)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := newDumpStateIndexer(t, 4096)
+			tc.seed(idx)
+			p := newDumpStateProducer(cfg, idx)
+
+			payload, err := p.DumpState()
+			require.NoError(t, err)
+			require.True(t, json.Valid(payload))
+
+			var got prefixCacheState
+			require.NoError(t, json.Unmarshal(payload, &got))
+			tc.check(t, got)
+		})
+	}
+}
+
+func TestDataProducer_DumpStateCapsPods(t *testing.T) {
+	idx := newDumpStateIndexer(t, 1<<20) // large capacity so nothing evicts
+	for i := 0; i < maxDebugDumpPods+5; i++ {
+		idx.Add([]blockHash{blockHash(i)}, dumpSrv(fmt.Sprintf("pod-%03d", i)))
+	}
+	p := newDumpStateProducer(config{BlockSizeTokens: 64, AutoTune: true}, idx)
+
+	payload, err := p.DumpState()
+	require.NoError(t, err)
+	var got prefixCacheState
+	require.NoError(t, json.Unmarshal(payload, &got))
+
+	require.True(t, got.Truncated)
+	require.Len(t, got.Pods, maxDebugDumpPods)
+	require.Equal(t, maxDebugDumpPods+5, got.TotalPods)
+	require.Equal(t, maxDebugDumpPods, got.MaxPods)
+	require.Equal(t, maxDebugDumpPods+5, got.Blocks)
+}
+
+// TestDataProducer_DumpStateNoHashLeak proves block hashes are never emitted:
+// only pod identities, counts, and config appear in the payload.
+func TestDataProducer_DumpStateNoHashLeak(t *testing.T) {
+	idx := newDumpStateIndexer(t, 4096)
+	idx.Add([]blockHash{0xDEADBEEF, 0xCAFEBABE}, dumpSrv("pod-a"))
+	p := newDumpStateProducer(config{BlockSizeTokens: 64, AutoTune: true}, idx)
+
+	payload, err := p.DumpState()
+	require.NoError(t, err)
+	for _, hash := range []string{"deadbeef", "cafebabe", "3735928559", "3405691582"} {
+		require.NotContains(t, string(payload), hash, "block hash leaked into DumpState payload")
+	}
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(payload, &raw))
+	for k := range raw {
+		require.Truef(t, map[string]bool{
+			"blockSizeTokens": true, "autoTune": true, "lruCapacityPerPod": true,
+			"blocks": true, "totalPodEntries": true, "totalPods": true,
+			"maxPods": true, "truncated": true, "pods": true,
+		}[k], "unexpected key %q in payload", k)
+	}
 }
