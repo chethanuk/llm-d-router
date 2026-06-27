@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -50,6 +51,9 @@ const (
 
 	// bytesPerImage is the assumed memory per tracked image.
 	bytesPerImage = 2 * 1024 * 1024
+
+	// maxDebugDumpEndpoints bounds the per-endpoint rows in the DumpState payload.
+	maxDebugDumpEndpoints = 100
 )
 
 var (
@@ -59,6 +63,7 @@ var (
 	_ requestcontrol.DataProducer = &Producer{}
 	_ requestcontrol.PreRequest   = &Producer{}
 	_ fwkdl.EndpointExtractor     = &Producer{}
+	_ plugin.StateDumper          = &Producer{}
 )
 
 // Parameters configures the multimodal encoder-cache data producer.
@@ -339,4 +344,55 @@ func (p *Producer) removePod(pod string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	delete(p.caches, pod)
+}
+
+type encoderCacheState struct {
+	Endpoints      []endpointEncoderCacheState `json:"endpoints"`
+	TotalEndpoints int                         `json:"totalEndpoints"`
+	MaxEndpoints   int                         `json:"maxEndpoints"`
+	CacheCapacity  int                         `json:"cacheCapacity"`
+	Truncated      bool                        `json:"truncated"`
+}
+
+type endpointEncoderCacheState struct {
+	Endpoint    string `json:"endpoint"`
+	CachedItems int    `json:"cachedItems"`
+}
+
+// DumpState implements [plugin.StateDumper] and exposes, per endpoint, the
+// number of multimodal content hashes currently held in that endpoint's LRU,
+// for the /debug/plugins/state endpoint. The content hashes themselves are
+// never emitted. The endpoint list is capped to the busiest endpoints to keep
+// the debug payload bounded on large deployments.
+func (p *Producer) DumpState() (json.RawMessage, error) {
+	return json.Marshal(p.snapshotState())
+}
+
+func (p *Producer) snapshotState() encoderCacheState {
+	p.mutex.RLock()
+	state := encoderCacheState{
+		Endpoints:      make([]endpointEncoderCacheState, 0, len(p.caches)),
+		TotalEndpoints: len(p.caches),
+		MaxEndpoints:   maxDebugDumpEndpoints,
+		CacheCapacity:  p.cacheSize,
+	}
+	for pod, podCache := range p.caches {
+		state.Endpoints = append(state.Endpoints, endpointEncoderCacheState{
+			Endpoint:    pod,
+			CachedItems: podCache.Len(),
+		})
+	}
+	p.mutex.RUnlock()
+
+	sort.SliceStable(state.Endpoints, func(i, j int) bool {
+		if state.Endpoints[i].CachedItems != state.Endpoints[j].CachedItems {
+			return state.Endpoints[i].CachedItems > state.Endpoints[j].CachedItems
+		}
+		return state.Endpoints[i].Endpoint < state.Endpoints[j].Endpoint
+	})
+	if len(state.Endpoints) > maxDebugDumpEndpoints {
+		state.Endpoints = state.Endpoints[:maxDebugDumpEndpoints]
+		state.Truncated = true
+	}
+	return state
 }
