@@ -3,6 +3,7 @@ package nohitlru_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -373,6 +374,191 @@ func TestNoHitLRUPreferLeastRecentlyUsedAfterColdRequests(t *testing.T) {
 		scorer.PreRequest(ctx, coldReqC, requestToEndpoint(endpointC))
 		assertHighestScoredPod(endpointA, "after-endpointC-used")
 	})
+}
+
+func TestNoHitLRU_DumpState(t *testing.T) {
+	ctx := utils.NewTestContext(t)
+
+	// resultTo builds a SchedulingResult routing a cold request to target.
+	resultTo := func(target scheduling.Endpoint) *scheduling.SchedulingResult {
+		const profile = "primary"
+		return &scheduling.SchedulingResult{
+			PrimaryProfileName: profile,
+			ProfileResults: map[string]*scheduling.ProfileRunResult{
+				profile: {TargetEndpoints: []scheduling.Endpoint{target}},
+			},
+		}
+	}
+
+	// seedCold routes one cold request to each endpoint in order, advancing the LRU.
+	seedCold := func(s *nohitlru.NoHitLRU, eps []scheduling.Endpoint) {
+		for i, ep := range eps {
+			req := &scheduling.InferenceRequest{RequestID: fmt.Sprintf("seed-%d", i)}
+			s.Score(ctx, req, []scheduling.Endpoint{ep})
+			s.PreRequest(ctx, req, resultTo(ep))
+		}
+	}
+
+	type want struct {
+		endpoints    []string
+		totalEntries int
+		maxEntries   int
+		truncated    bool
+	}
+
+	tests := []struct {
+		name  string
+		build func() *nohitlru.NoHitLRU
+		want  want
+	}{
+		{
+			name:  "empty",
+			build: func() *nohitlru.NoHitLRU { return nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil) },
+			want:  want{endpoints: []string{}, totalEntries: 0, maxEntries: 100, truncated: false},
+		},
+		{
+			name: "recency_order_oldest_first",
+			build: func() *nohitlru.NoHitLRU {
+				s := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
+				seedCold(s, []scheduling.Endpoint{newColdNS("pod-a"), newColdNS("pod-b"), newColdNS("pod-c")})
+				return s
+			},
+			want: want{
+				endpoints:    []string{"default/pod-a", "default/pod-b", "default/pod-c"},
+				totalEntries: 3, maxEntries: 100, truncated: false,
+			},
+		},
+		{
+			name: "exact_cap_not_truncated",
+			build: func() *nohitlru.NoHitLRU {
+				s := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
+				eps := make([]scheduling.Endpoint, 0, 100)
+				for i := 0; i < 100; i++ {
+					eps = append(eps, newColdNS(fmt.Sprintf("pod-%03d", i)))
+				}
+				seedCold(s, eps)
+				return s
+			},
+			// exactly at the cap: full set emitted, not truncated.
+			want: want{totalEntries: 100, maxEntries: 100, truncated: false},
+		},
+		{
+			name: "capped_and_truncated",
+			build: func() *nohitlru.NoHitLRU {
+				s := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
+				eps := make([]scheduling.Endpoint, 0, 105)
+				for i := 0; i < 105; i++ {
+					eps = append(eps, newColdNS(fmt.Sprintf("pod-%03d", i)))
+				}
+				seedCold(s, eps)
+				return s
+			},
+			// expect 100 entries, the oldest-first head (pod-000..pod-099), truncated.
+			want: want{totalEntries: 105, maxEntries: 100, truncated: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.build().DumpState()
+			if err != nil {
+				t.Fatalf("DumpState error: %v", err)
+			}
+			if !json.Valid(payload) {
+				t.Fatalf("DumpState returned invalid JSON: %s", payload)
+			}
+			var got struct {
+				Endpoints    []string `json:"endpoints"`
+				TotalEntries int      `json:"totalEntries"`
+				MaxEntries   int      `json:"maxEntries"`
+				Truncated    bool     `json:"truncated"`
+			}
+			if err := json.Unmarshal(payload, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			assertDumpStateKeys(t, payload)
+			if got.TotalEntries != tt.want.totalEntries || got.MaxEntries != tt.want.maxEntries || got.Truncated != tt.want.truncated {
+				t.Fatalf("counts mismatch: got %+v want %+v", got, tt.want)
+			}
+			if len(got.Endpoints) > got.MaxEntries {
+				t.Fatalf("endpoints exceed cap: %d", len(got.Endpoints))
+			}
+			if tt.want.endpoints != nil {
+				if diff := cmp.Diff(tt.want.endpoints, got.Endpoints); diff != "" {
+					t.Fatalf("endpoints mismatch (-want +got): %s", diff)
+				}
+			}
+			if tt.name == "capped_and_truncated" {
+				if len(got.Endpoints) != 100 || got.Endpoints[0] != "default/pod-000" {
+					t.Fatalf("expected oldest-first head of 100, got len=%d first=%q", len(got.Endpoints), got.Endpoints[0])
+				}
+			}
+		})
+	}
+}
+
+// assertDumpStateKeys asserts the DumpState payload exposes exactly the four
+// sanitized fields and nothing else, so a future field that leaked request data
+// would fail the test rather than be silently dropped on unmarshal.
+func assertDumpStateKeys(t *testing.T, payload []byte) {
+	t.Helper()
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("unmarshal raw keys: %v", err)
+	}
+	wantKeys := map[string]bool{"endpoints": true, "totalEntries": true, "maxEntries": true, "truncated": true}
+	for k := range raw {
+		if !wantKeys[k] {
+			t.Fatalf("unexpected key %q in DumpState payload: %s", k, payload)
+		}
+	}
+	for k := range wantKeys {
+		if _, ok := raw[k]; !ok {
+			t.Fatalf("missing key %q in DumpState payload: %s", k, payload)
+		}
+	}
+}
+
+// TestNoHitLRU_DumpState_NoRequestDataLeak seeds the LRU through a cold request
+// carrying canary request data (ID, model, headers, body) and asserts none of it
+// surfaces in the dump: only the endpoint identity (the LRU key) is emitted.
+func TestNoHitLRU_DumpState_NoRequestDataLeak(t *testing.T) {
+	ctx := utils.NewTestContext(t)
+	s := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
+
+	const (
+		canaryReqID  = "canary-request-id-DO-NOT-LEAK"
+		canaryModel  = "canary-model-DO-NOT-LEAK"
+		canaryHeader = "canary-header-DO-NOT-LEAK"
+	)
+	ep := newColdNS("pod-a")
+	req := &scheduling.InferenceRequest{
+		RequestID:   canaryReqID,
+		TargetModel: canaryModel,
+		Headers:     map[string]string{"X-Canary": canaryHeader},
+	}
+	s.Score(ctx, req, []scheduling.Endpoint{ep})
+	s.PreRequest(ctx, req, &scheduling.SchedulingResult{
+		PrimaryProfileName: "primary",
+		ProfileResults: map[string]*scheduling.ProfileRunResult{
+			"primary": {TargetEndpoints: []scheduling.Endpoint{ep}},
+		},
+	})
+
+	payload, err := s.DumpState()
+	if err != nil {
+		t.Fatalf("DumpState error: %v", err)
+	}
+	assertDumpStateKeys(t, payload)
+	for _, canary := range []string{canaryReqID, canaryModel, canaryHeader} {
+		if strings.Contains(string(payload), canary) {
+			t.Fatalf("request canary %q leaked into DumpState payload: %s", canary, payload)
+		}
+	}
+	// Sanity: the endpoint identity (the LRU key) is what should appear.
+	if !strings.Contains(string(payload), "default/pod-a") {
+		t.Fatalf("expected endpoint identity in payload, got: %s", payload)
+	}
 }
 
 func TestNoHitLRUEdgeCases(t *testing.T) {
