@@ -3,6 +3,7 @@ package programaware
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol"
 	fwkfcmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol/mocks"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
+	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 )
@@ -254,4 +256,140 @@ func TestGetOrCreateMetrics_Idempotent(t *testing.T) {
 	a := p.getOrCreateMetrics("alpha")
 	b := p.getOrCreateMetrics("alpha")
 	assert.Same(t, a, b)
+}
+
+func newDumpPlugin(t *testing.T) *ProgramAwarePlugin {
+	t.Helper()
+	s, err := newStrategy(DefaultConfig())
+	require.NoError(t, err)
+	return &ProgramAwarePlugin{strategy: s}
+}
+
+func TestProgramAwarePlugin_DumpState(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		p := &ProgramAwarePlugin{}
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.True(t, json.Valid(payload))
+		var state programAwareState
+		require.NoError(t, json.Unmarshal(payload, &state))
+		assert.Equal(t, "las", state.Strategy)
+		assert.Equal(t, 1.0, state.JainsFairnessIndex)
+		assert.Empty(t, state.Programs)
+		assert.Equal(t, 0, state.TotalPrograms)
+		assert.Equal(t, maxDebugDumpPrograms, state.MaxPrograms)
+		assert.False(t, state.Truncated)
+	})
+
+	t.Run("single program completed", func(t *testing.T) {
+		p := newDumpPlugin(t)
+		req := &fwksched.InferenceRequest{FairnessID: "alpha"}
+		req.PutAttribute(enqueueTimeAttributeKey, time.Now().Add(-50*time.Millisecond))
+		p.PreRequest(context.Background(), req, nil)
+		p.ResponseBody(context.Background(), req, &fwkrc.Response{
+			EndOfStream: true,
+			Usage:       fwkrh.Usage{PromptTokens: 10, CompletionTokens: 5},
+		}, nil)
+
+		var state programAwareState
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(payload, &state))
+		require.Len(t, state.Programs, 1)
+		ps := state.Programs[0]
+		assert.Equal(t, "alpha", ps.ProgramID)
+		assert.Equal(t, int64(1), ps.DispatchedCount)
+		assert.Equal(t, int64(0), ps.InFlight)
+		assert.Equal(t, int64(1), ps.WaitCount)
+		assert.Equal(t, float64(1*10+2*5), ps.AttainedService)
+		assert.NotEmpty(t, ps.LastCompletionTime)
+	})
+
+	t.Run("in-flight has zero service and empty completion time", func(t *testing.T) {
+		// Use the production PreRequest path: getOrCreateMetrics seeds
+		// lastCompletionTime to "now", so this verifies the dump does NOT report
+		// that seed as a completion time for a request still in flight.
+		p := newDumpPlugin(t)
+		req := &fwksched.InferenceRequest{FairnessID: "beta"}
+		p.PreRequest(context.Background(), req, nil) // dispatched, in-flight, no completion
+
+		var state programAwareState
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(payload, &state))
+		require.Len(t, state.Programs, 1)
+		assert.Equal(t, int64(1), state.Programs[0].DispatchedCount)
+		assert.Equal(t, int64(1), state.Programs[0].InFlight)
+		assert.Equal(t, float64(0), state.Programs[0].AttainedService)
+		assert.Empty(t, state.Programs[0].LastCompletionTime)
+	})
+
+	t.Run("multi-program ordering busiest first", func(t *testing.T) {
+		p := newDumpPlugin(t)
+		a := &ProgramMetrics{}
+		a.RecordDispatched(time.Time{})
+		a.RecordDispatched(time.Time{}) // inFlight 2
+		p.programMetrics.Store("prog-a", a)
+		b := &ProgramMetrics{}
+		b.RecordDispatched(time.Time{}) // inFlight 1
+		p.programMetrics.Store("prog-b", b)
+
+		var state programAwareState
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(payload, &state))
+		require.Equal(t, 2, state.TotalPrograms)
+		assert.Equal(t, "prog-a", state.Programs[0].ProgramID)
+		assert.Equal(t, "prog-b", state.Programs[1].ProgramID)
+	})
+
+	t.Run("truncation", func(t *testing.T) {
+		p := newDumpPlugin(t)
+		for i := 0; i < maxDebugDumpPrograms+5; i++ {
+			m := p.getOrCreateMetrics(fmt.Sprintf("prog-%03d", i))
+			// More in-flight for higher indices so the head is deterministic.
+			for j := 0; j <= i; j++ {
+				m.RecordDispatched(time.Time{})
+			}
+		}
+		var state programAwareState
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(payload, &state))
+		assert.True(t, state.Truncated)
+		assert.Len(t, state.Programs, maxDebugDumpPrograms)
+		assert.Equal(t, maxDebugDumpPrograms+5, state.TotalPrograms)
+		assert.Equal(t, maxDebugDumpPrograms, state.MaxPrograms)
+	})
+
+	t.Run("valid json no unexpected keys", func(t *testing.T) {
+		p := newDumpPlugin(t)
+		m := p.getOrCreateMetrics("alpha")
+		m.RecordDispatched(time.Time{})
+		payload, err := p.DumpState()
+		require.NoError(t, err)
+		require.True(t, json.Valid(payload))
+
+		var top map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(payload, &top))
+		for k := range top {
+			require.Truef(t, map[string]bool{
+				"strategy": true, "jainsFairnessIndex": true, "programs": true,
+				"totalPrograms": true, "maxPrograms": true, "truncated": true,
+			}[k], "unexpected top-level key %q", k)
+		}
+		var progs struct {
+			Programs []map[string]json.RawMessage `json:"programs"`
+		}
+		require.NoError(t, json.Unmarshal(payload, &progs))
+		for _, pr := range progs.Programs {
+			for k := range pr {
+				require.Truef(t, map[string]bool{
+					"programID": true, "dispatchedCount": true, "inFlight": true,
+					"averageWaitTimeMs": true, "waitCount": true, "attainedService": true,
+					"lastCompletionTime": true,
+				}[k], "unexpected program key %q", k)
+			}
+		}
+	})
 }
