@@ -46,6 +46,8 @@ type roundRobin struct {
 	name string
 }
 
+var _ fwkplugin.StateDumper = &roundRobin{}
+
 func newRoundRobin(name string) *roundRobin {
 	if name == "" {
 		name = RoundRobinFairnessPolicyType
@@ -125,4 +127,28 @@ func (p *roundRobin) Pick(
 	// No non-empty queue was found.
 	c.lastSelected = nil
 	return nil, nil //nolint:nilnil
+}
+
+// roundRobinState is the debug snapshot for the round-robin fairness policy.
+// The policy is a stateless singleton: its per-priority-band cursors live in the
+// flow-control registry (PriorityBandAccessor.PolicyState), not on the plugin, so
+// no live scheduling state is reachable from here. This snapshot reports only
+// static identity plus an explicit marker so operators are not misled into
+// thinking the cursor position is shown.
+type roundRobinState struct {
+	Policy   string `json:"policy"`
+	Stateful bool   `json:"stateful"`
+	Note     string `json:"note"`
+}
+
+// DumpState implements [fwkplugin.StateDumper]. The round-robin policy holds no
+// mutable runtime state on the plugin; the per-band cursors are owned by the flow
+// registry. The payload is therefore a fixed, bounded struct independent of band
+// or flow cardinality.
+func (p *roundRobin) DumpState() (json.RawMessage, error) {
+	return json.Marshal(roundRobinState{
+		Policy:   RoundRobinFairnessPolicyType,
+		Stateful: false,
+		Note:     "round-robin cursors are tracked per priority band in the flow-control registry, not on this plugin",
+	})
 }

@@ -18,6 +18,7 @@ package roundrobin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -281,4 +282,89 @@ func TestRoundRobin_Pick_Concurrency(t *testing.T) {
 			t.Logf("Selection distribution: %s", countsStr)
 		})
 	}
+}
+
+func TestRoundRobin_DumpState(t *testing.T) {
+	t.Parallel()
+
+	// decode unmarshals the payload into the snapshot shape plus a catch-all so a
+	// stray extra field (e.g. a leaked flow ID or name) would be detectable.
+	decode := func(t *testing.T, payload json.RawMessage) (roundRobinState, map[string]json.RawMessage) {
+		t.Helper()
+		require.True(t, json.Valid(payload), "DumpState must return valid JSON")
+		var s roundRobinState
+		require.NoError(t, json.Unmarshal(payload, &s))
+		var raw map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(payload, &raw))
+		return s, raw
+	}
+
+	assertHonest := func(t *testing.T, s roundRobinState, raw map[string]json.RawMessage) {
+		t.Helper()
+		assert.Equal(t, RoundRobinFairnessPolicyType, s.Policy)
+		assert.False(t, s.Stateful, "policy holds no reachable mutable state")
+		assert.NotEmpty(t, s.Note, "note must explain where cursors actually live")
+		// Exactly the three sanitized fields, nothing else (no name, no flow IDs).
+		wantKeys := map[string]bool{"policy": true, "stateful": true, "note": true}
+		for k := range raw {
+			assert.Truef(t, wantKeys[k], "unexpected key %q in DumpState payload", k)
+		}
+		assert.Len(t, raw, len(wantKeys), "payload must contain only policy, stateful, note")
+	}
+
+	tests := []struct {
+		name   string
+		policy *roundRobin
+	}{
+		{name: "default name", policy: newRoundRobin("")},
+		{name: "custom name", policy: newRoundRobin("rr-a")},
+	}
+
+	var defaultBytes json.RawMessage
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := tt.policy.DumpState()
+			require.NoError(t, err)
+			s, raw := decode(t, payload)
+			assertHonest(t, s, raw)
+			if tt.name == "default name" {
+				defaultBytes = payload
+			} else {
+				// Name is not emitted: a differently-named policy yields identical bytes.
+				assert.JSONEq(t, string(defaultBytes), string(payload),
+					"plugin name must not appear in the dump")
+			}
+		})
+	}
+
+	// Plugin-specific edge case: the dump cannot reflect cursor movement because
+	// the cursor lives in the band's PolicyState, not on the plugin. Advance a
+	// cursor via Pick, then assert DumpState is byte-identical to the untouched case.
+	t.Run("invariant after Pick", func(t *testing.T) {
+		policy := newRoundRobin("")
+		ctx := context.Background()
+		state := policy.NewState(ctx)
+		queue1 := &fwkfcmocks.MockFlowQueueAccessor{LenV: 1, FlowKeyV: flow1Key}
+		queue2 := &fwkfcmocks.MockFlowQueueAccessor{LenV: 2, FlowKeyV: flow2Key}
+		mockBand := &fwkfcmocks.MockPriorityBandAccessor{
+			PolicyStateV: state,
+			FlowKeysFunc: func() []flowcontrol.FlowKey { return []flowcontrol.FlowKey{flow1Key, flow2Key} },
+			QueueFunc: func(id string) flowcontrol.FlowQueueAccessor {
+				if id == flow1ID {
+					return queue1
+				}
+				return queue2
+			},
+		}
+		selected, err := policy.Pick(ctx, mockBand)
+		require.NoError(t, err)
+		require.NotNil(t, selected, "Pick should advance the band cursor")
+
+		payload, err := policy.DumpState()
+		require.NoError(t, err)
+		s, raw := decode(t, payload)
+		assertHonest(t, s, raw)
+		assert.JSONEq(t, string(defaultBytes), string(payload),
+			"DumpState must not and cannot reflect cursor movement")
+	})
 }
