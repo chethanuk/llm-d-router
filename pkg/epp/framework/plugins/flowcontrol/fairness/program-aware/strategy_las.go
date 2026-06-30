@@ -191,3 +191,23 @@ func (s *LASStrategy) EvictProgram(id string) {
 func (s *LASStrategy) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{attainedServiceTokens}
 }
+
+// SnapshotService returns a best-effort point-in-time copy of attained service
+// per program. Each program's value is read under its own lock, so the map is
+// not guaranteed to reflect a single instant.
+func (s *LASStrategy) SnapshotService() map[string]float64 {
+	out := map[string]float64{}
+	s.state.Range(func(key, value any) bool {
+		id, ok := key.(string)
+		if !ok {
+			return true
+		}
+		st, ok := value.(*lasState)
+		if !ok {
+			return true
+		}
+		out[id] = st.Service()
+		return true
+	})
+	return out
+}

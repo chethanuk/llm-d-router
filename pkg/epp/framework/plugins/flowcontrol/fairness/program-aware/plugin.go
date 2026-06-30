@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -72,7 +73,115 @@ var (
 	_ flowcontrol.FairnessPolicy  = &ProgramAwarePlugin{}
 	_ fwkrc.PreRequest            = &ProgramAwarePlugin{}
 	_ fwkrc.ResponseBodyProcessor = &ProgramAwarePlugin{}
+	_ plugin.StateDumper          = &ProgramAwarePlugin{}
 )
+
+const maxDebugDumpPrograms = 100
+
+// serviceSnapshotter is the optional capability a Strategy may implement to
+// expose its per-program accounting to DumpState.
+type serviceSnapshotter interface {
+	SnapshotService() map[string]float64
+}
+
+type programAwareState struct {
+	Strategy           string         `json:"strategy"`
+	JainsFairnessIndex float64        `json:"jainsFairnessIndex"`
+	Programs           []programState `json:"programs"`
+	TotalPrograms      int            `json:"totalPrograms"`
+	MaxPrograms        int            `json:"maxPrograms"`
+	Truncated          bool           `json:"truncated"`
+}
+
+type programState struct {
+	ProgramID          string  `json:"programID"`
+	DispatchedCount    int64   `json:"dispatchedCount"`
+	InFlight           int64   `json:"inFlight"`
+	AverageWaitTimeMs  float64 `json:"averageWaitTimeMs"`
+	WaitCount          int64   `json:"waitCount"`
+	AttainedService    float64 `json:"attainedService"`
+	LastCompletionTime string  `json:"lastCompletionTime,omitempty"`
+}
+
+// DumpState implements [plugin.StateDumper] and exposes per-program fairness
+// accounting for the /debug/plugins/state endpoint.
+//
+// Each program's ProgramMetrics fields and its LAS attained service are read
+// under their own per-entry locks, so the values for a program are not
+// guaranteed to come from a single instant and a program may appear in one
+// snapshot but not the other. This is acceptable for a debug endpoint, where
+// best-effort visibility is preferred over a single global lock that would
+// contend with the scheduling hot path.
+//
+// The program list is capped to the busiest programs to keep the payload
+// bounded when many programs are active.
+func (p *ProgramAwarePlugin) DumpState() (json.RawMessage, error) {
+	return json.Marshal(p.snapshotState())
+}
+
+func (p *ProgramAwarePlugin) snapshotState() programAwareState {
+	strategy := p.getStrategy()
+
+	service := map[string]float64{}
+	if snap, ok := strategy.(serviceSnapshotter); ok {
+		service = snap.SnapshotService()
+	}
+
+	programs := make([]programState, 0)
+	p.programMetrics.Range(func(key, value any) bool {
+		id, ok := key.(string)
+		if !ok {
+			return true
+		}
+		m, ok := value.(*ProgramMetrics)
+		if !ok {
+			return true
+		}
+		ps := programState{
+			ProgramID:         id,
+			DispatchedCount:   m.DispatchedCount(),
+			InFlight:          m.InFlight(),
+			AverageWaitTimeMs: m.AverageWaitTime(),
+			WaitCount:         m.WaitCount(),
+			AttainedService:   service[id],
+		}
+		// getOrCreateMetrics seeds lastCompletionTime to "now", so a non-zero
+		// value alone does not mean a request has completed. Emit it only once at
+		// least one request has actually completed (dispatched minus still
+		// in-flight), so an in-flight or never-completed program reports no
+		// completion time rather than the seed timestamp.
+		if completed := ps.DispatchedCount - ps.InFlight; completed > 0 {
+			if t := m.LastCompletionTime(); !t.IsZero() {
+				ps.LastCompletionTime = t.UTC().Format(time.RFC3339Nano)
+			}
+		}
+		programs = append(programs, ps)
+		return true
+	})
+
+	sort.SliceStable(programs, func(i, j int) bool {
+		if programs[i].InFlight != programs[j].InFlight {
+			return programs[i].InFlight > programs[j].InFlight
+		}
+		if programs[i].DispatchedCount != programs[j].DispatchedCount {
+			return programs[i].DispatchedCount > programs[j].DispatchedCount
+		}
+		return programs[i].ProgramID < programs[j].ProgramID
+	})
+
+	state := programAwareState{
+		Strategy:           strategy.Name(),
+		JainsFairnessIndex: p.computeFairnessIndex(),
+		TotalPrograms:      len(programs),
+		MaxPrograms:        maxDebugDumpPrograms,
+		Programs:           programs,
+	}
+	if len(state.Programs) > maxDebugDumpPrograms {
+		state.Programs = state.Programs[:maxDebugDumpPrograms]
+		state.Truncated = true
+	}
+	return state
+}
 
 //nolint:revive // factory name matches sibling fairness plugins.
 func ProgramAwarePluginFactory(name string, parameters *json.Decoder, handle plugin.Handle) (plugin.Plugin, error) {

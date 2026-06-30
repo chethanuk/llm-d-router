@@ -149,3 +149,25 @@ func TestRangeNormalize(t *testing.T) {
 	assert.InDelta(t, 0.25, rangeNormalize(2.5, 0, 10), 0.001)
 	assert.True(t, math.IsNaN(rangeNormalize(0, 1, 1)) || rangeNormalize(0, 1, 1) == 0.5)
 }
+
+func TestLASStrategy_SnapshotService(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		s := &LASStrategy{}
+		assert.Empty(t, s.SnapshotService())
+	})
+
+	t.Run("reflects accumulated service", func(t *testing.T) {
+		s := &LASStrategy{}
+		req := &fwksched.InferenceRequest{FairnessID: "alpha"}
+		resp := &fwkrc.Response{EndOfStream: true}
+		resp.Usage.PromptTokens = 100
+		resp.Usage.CompletionTokens = 50
+		s.OnCompleted(nil, req, resp)
+
+		got := s.SnapshotService()
+		require.Len(t, got, 1)
+		// cost = 1*100 + 2*50 = 200, matching getOrCreateState("alpha").Service()
+		assert.Equal(t, s.getOrCreateState("alpha").Service(), got["alpha"])
+		assert.Equal(t, 200.0, got["alpha"])
+	})
+}
