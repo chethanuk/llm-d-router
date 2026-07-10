@@ -136,6 +136,20 @@ func (p *SchedulerProfile) runFilterPlugins(ctx context.Context, request *fwksch
 	filteredEndpoints := endpoints
 	logger.V(logutil.DEBUG).Info("Before running filter plugins", "endpoints", filteredEndpoints)
 
+	ctx, span := tracing.Tracer(TracerScope).Start(ctx, "filter_endpoints",
+		trace.WithSpanKind(trace.SpanKindInternal),
+	)
+	defer span.End()
+	span.SetAttributes(attribute.Int("llm_d.epp.filter.candidate_endpoints", len(endpoints)))
+	if request != nil {
+		if request.TargetModel != "" {
+			span.SetAttributes(attribute.String("gen_ai.request.model", request.TargetModel))
+		}
+		if request.RequestID != "" {
+			span.SetAttributes(attribute.String("gen_ai.request.id", request.RequestID))
+		}
+	}
+
 	for _, filter := range p.filters {
 		logger.V(logutil.VERBOSE).Info("Running filter plugin", "plugin", filter.TypedName())
 		before := time.Now()
@@ -147,6 +161,7 @@ func (p *SchedulerProfile) runFilterPlugins(ctx context.Context, request *fwksch
 			break
 		}
 	}
+	span.SetAttributes(attribute.Int("llm_d.epp.filter.filtered_endpoints", len(filteredEndpoints)))
 	logger.V(logutil.VERBOSE).Info("Completed running filter plugins", "remainingEndpoints", len(filteredEndpoints))
 
 	return filteredEndpoints
