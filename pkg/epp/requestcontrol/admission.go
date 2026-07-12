@@ -145,8 +145,8 @@ func NewFlowControlAdmissionController(fc flowController, poolName string) *Flow
 	}
 }
 
-// Admit implements the AdmissionController interface by checking for saturation on sheddable requests first, then
-// deferring to the Flow Control system.
+// Admit defers the admission decision to the Flow Control system via EnqueueAndWait; saturation-based shedding
+// of sheddable requests is handled downstream by the dispatch cycle, not at admission.
 func (fcac *FlowControlAdmissionController) Admit(
 	ctx context.Context,
 	reqCtx *handlers.RequestContext,
