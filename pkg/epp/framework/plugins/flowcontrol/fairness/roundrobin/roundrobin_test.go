@@ -18,6 +18,7 @@ package roundrobin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -281,4 +282,64 @@ func TestRoundRobin_Pick_Concurrency(t *testing.T) {
 			t.Logf("Selection distribution: %s", countsStr)
 		})
 	}
+}
+
+func TestRoundRobin_DumpState(t *testing.T) {
+	t.Parallel()
+
+	want := roundRobinState{
+		Policy:      RoundRobinFairnessPolicyType,
+		Stateful:    false,
+		CursorOwner: "flow-control registry, per priority band",
+	}
+
+	tests := []struct {
+		name   string
+		policy *roundRobin
+	}{
+		{name: "default name", policy: newRoundRobin("")},
+		{name: "custom name", policy: newRoundRobin("rr-custom")},
+		// Zero-value receiver: the payload is fixed, so the dump must not
+		// depend on constructor-set fields.
+		{name: "zero value", policy: &roundRobin{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			payload, err := tt.policy.DumpState()
+			require.NoError(t, err)
+			require.True(t, json.Valid(payload), "DumpState must return valid JSON")
+
+			var got roundRobinState
+			require.NoError(t, json.Unmarshal(payload, &got))
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+func TestRoundRobin_DumpState_UnaffectedByPick(t *testing.T) {
+	t.Parallel()
+	policy := newRoundRobin("")
+	ctx := context.Background()
+
+	before, err := policy.DumpState()
+	require.NoError(t, err)
+
+	queue1 := &fwkfcmocks.MockFlowQueueAccessor{LenV: 1, FlowKeyV: flow1Key}
+	mockBand := &fwkfcmocks.MockPriorityBandAccessor{
+		PolicyStateV: policy.NewState(ctx),
+		FlowKeysFunc: func() []flowcontrol.FlowKey { return []flowcontrol.FlowKey{flow1Key} },
+		QueueFunc:    func(string) flowcontrol.FlowQueueAccessor { return queue1 },
+	}
+	selected, err := policy.Pick(ctx, mockBand)
+	require.NoError(t, err)
+	require.NotNil(t, selected, "Pick should advance the band cursor")
+
+	// The cursor lives in the band's PolicyState, not on the plugin, so the dump
+	// is identical before and after Pick and never carries flow IDs.
+	after, err := policy.DumpState()
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after))
+	assert.NotContains(t, string(after), flow1ID)
 }
