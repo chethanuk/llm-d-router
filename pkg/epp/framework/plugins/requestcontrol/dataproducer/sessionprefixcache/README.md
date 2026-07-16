@@ -38,11 +38,11 @@ account key.
 
 A per-pod LRU index records which chains were served to which endpoint.
 `Produce` scores each candidate pod by its longest cached prefix; `PreRequest`
-seeds the served endpoint of every scheduling profile (so P/D-disaggregated
-prefill nodes gain affinity too); `ResponseBody` reads the served response's
-reported prompt-token usage to **confirm** the prefix the engine actually cached
-and **trim** any over-estimated tail, so the index refines downward rather than
-only growing.
+synchronously seeds the served endpoint of every scheduling profile (so
+P/D-disaggregated prefill nodes gain affinity too); `ResponseBody` reads the
+served response's reported prompt-token usage to **confirm** the prefix the
+engine actually cached and **trim** any over-estimated tail, so the index
+refines downward rather than only growing.
 
 ## Configuration
 

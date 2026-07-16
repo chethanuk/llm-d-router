@@ -28,7 +28,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -96,7 +95,6 @@ type sessionPrefixCacheProducer struct {
 	index           *index
 	state           *fwkplugin.PluginState
 	stateKey        fwkplugin.StateKey
-	wg              sync.WaitGroup // awaits async index seeding; drained by tests.
 	chunkSizeBytes  int
 	maxChunks       int
 	blockSizeTokens int
@@ -221,8 +219,11 @@ func (p *sessionPrefixCacheProducer) PreRequest(ctx context.Context, req *fwksch
 	// Seed the served endpoint of every scheduling profile, not just the primary,
 	// so P/D-disaggregated prefill nodes also gain affinity (R2-6). A pod may
 	// front multiple profiles; dedupe to avoid redundant index writes.
+	//
+	// Seeding is synchronous: ResponseBody may refine the same chain downward on
+	// the served endpoint, and an async Add(estimated) racing after that trim
+	// would re-insert the discarded tail.
 	seen := make(map[ServerID]struct{})
-	var servers []ServerID
 	for _, pr := range result.ProfileResults {
 		if pr == nil || len(pr.TargetEndpoints) == 0 {
 			continue
@@ -232,15 +233,8 @@ func (p *sessionPrefixCacheProducer) PreRequest(ctx context.Context, req *fwksch
 			continue
 		}
 		seen[srv] = struct{}{}
-		servers = append(servers, srv)
+		p.index.Add(st.chain, srv, estimated)
 	}
-
-	chain := st.chain
-	p.wg.Go(func() {
-		for _, srv := range servers {
-			p.index.Add(chain, srv, estimated)
-		}
-	})
 }
 
 // ResponseBody confirms the prefix the served pod actually cached (from reported

@@ -116,7 +116,6 @@ func TestProduce_AffinityAfterPreRequest(t *testing.T) {
 	assert.Equal(t, 0, matchInfo(t, ep2).MatchBlocks())
 
 	p.PreRequest(context.Background(), turn1, schedTo(ep1))
-	p.wg.Wait()
 
 	// Turn 2: same id, appended message pushes past the first chunk.
 	turn2 := chatReq("sess-A", bigText(700), bigText(700))
@@ -144,7 +143,6 @@ func TestChunk_DivergentContentSameDeclaredId(t *testing.T) {
 	seedTotal := matchInfo(t, ep).TotalBlocks()
 	require.Greater(t, seedTotal, 1, "need at least two chunks to prove partial match")
 	p.PreRequest(context.Background(), seed, schedTo(ep))
-	p.wg.Wait()
 
 	// Same id and identical first chunk, divergent tail chunk.
 	query := chatReq("sess", bigText(700), strings.Repeat("C", 700))
@@ -165,7 +163,6 @@ func TestChunk_SharedFirstChunkDifferentContinuation(t *testing.T) {
 	seed := chatReq("", bigText(700), strings.Repeat("B", 700))
 	require.NoError(t, p.Produce(context.Background(), seed, eps))
 	p.PreRequest(context.Background(), seed, schedTo(ep))
-	p.wg.Wait()
 
 	query := chatReq("", bigText(700), strings.Repeat("C", 700))
 	require.NoError(t, p.Produce(context.Background(), query, eps))
@@ -196,7 +193,6 @@ func TestChunk_SubChunkGrowthNoSignal(t *testing.T) {
 	require.NoError(t, p.Produce(context.Background(), seed, eps))
 	require.Equal(t, 1, matchInfo(t, ep).TotalBlocks())
 	p.PreRequest(context.Background(), seed, schedTo(ep))
-	p.wg.Wait()
 
 	resend := chatReq("sess", bigText(700), bigText(700))
 	require.NoError(t, p.Produce(context.Background(), resend, eps))
@@ -217,7 +213,6 @@ func TestChunk_RoleAndBoundaryFraming(t *testing.T) {
 	require.NoError(t, p.Produce(context.Background(), single, eps))
 	require.Greater(t, matchInfo(t, ep).TotalBlocks(), 0)
 	p.PreRequest(context.Background(), single, schedTo(ep))
-	p.wg.Wait()
 
 	// Same concatenated text, but split across a user and an assistant message.
 	split := chatReq("sess")
@@ -326,7 +321,6 @@ func TestResponseBody_RefinesDownwardOnLowerUsage(t *testing.T) {
 	total := matchInfo(t, ep).TotalBlocks()
 	require.GreaterOrEqual(t, total, 3)
 	p.PreRequest(context.Background(), req, schedTo(ep))
-	p.wg.Wait()
 
 	// Before refinement the full estimated chain matches.
 	probe := chatReq("sess", bigText(1600))
