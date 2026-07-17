@@ -28,6 +28,10 @@ type Plugin interface {
 // DataDependencies holds the data keys a plugin consumes, split by whether they
 // are required (framework errors if no producer exists) or optional (framework
 // logs a warning but continues if no producer exists).
+//
+// The declared dependencies order every requestcontrol extension point: on each
+// of RequestHeader, Admit, Produce, PreRequest, ResponseHeader and ResponseBody,
+// a plugin runs after the plugins producing the keys it consumes.
 type DataDependencies struct {
 	// Required keys — the framework will error at init time if no producer exists for any of these.
 	Required map[DataKey]any
