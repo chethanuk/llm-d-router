@@ -47,6 +47,15 @@ func (p *stateDebugTestDumper) DumpState() (json.RawMessage, error) {
 	return p.state, p.err
 }
 
+type stateDebugTestStateless struct {
+	stateDebugTestPlugin
+	location fwkplugin.StateLocation
+}
+
+func (p *stateDebugTestStateless) StateLocation() fwkplugin.StateLocation {
+	return p.location
+}
+
 func withFrozenNow(t *testing.T, fixed time.Time) {
 	t.Helper()
 	prev := nowFunc
@@ -91,6 +100,32 @@ func TestPluginStateDebugHandlerIncludesPlugins(t *testing.T) {
 	require.Contains(t, response.Plugins, "a-dumper")
 	require.Equal(t, pluginStateUnsupportedText, response.Plugins["skip"].Message)
 	require.Contains(t, response.Plugins, "z-dumper")
+}
+
+func TestPluginStateDebugHandlerRendersStatelessPlugins(t *testing.T) {
+	withFrozenNow(t, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC))
+
+	handle := fwkplugin.NewEppHandle(context.Background(), nil)
+	handle.AddPlugin("stateless", &stateDebugTestStateless{
+		stateDebugTestPlugin: stateDebugTestPlugin{typedName: fwkplugin.TypedName{Type: "stateless-type", Name: "stateless"}},
+		location:             fwkplugin.StateLocation{Owner: "some-registry", Reason: "held elsewhere"},
+	})
+	handle.AddPlugin("unsupported", &stateDebugTestPlugin{
+		typedName: fwkplugin.TypedName{Type: "plain-type", Name: "unsupported"},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, PluginStateDebugPath, nil)
+	NewPluginStateDebugHandler(handle).ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{
+		"timestamp": "2025-01-02T03:04:05Z",
+		"plugins": {
+			"stateless": {"name":"stateless","type":"stateless-type","state":{"stateful":false,"stateLocation":{"owner":"some-registry","reason":"held elsewhere"}}},
+			"unsupported": {"name":"unsupported","type":"plain-type","message":"plugin does not support state collection"}
+		}
+	}`, recorder.Body.String())
 }
 
 func TestPluginStateDebugHandlerRejectsNonGet(t *testing.T) {

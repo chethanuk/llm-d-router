@@ -46,7 +46,7 @@ type roundRobin struct {
 	name string
 }
 
-var _ fwkplugin.StateDumper = &roundRobin{}
+var _ fwkplugin.StatelessPlugin = &roundRobin{}
 
 func newRoundRobin(name string) *roundRobin {
 	if name == "" {
@@ -129,23 +129,13 @@ func (p *roundRobin) Pick(
 	return nil, nil //nolint:nilnil
 }
 
-// roundRobinState is the snapshot returned by DumpState. The plugin instance is
-// stateless: per-band rotation cursors are created by NewState and owned by the
-// flow-control registry, one per priority band, so no cursor position is
-// reachable from the plugin. The snapshot reports policy identity and where the
-// cursors live instead.
-type roundRobinState struct {
-	Policy      string `json:"policy"`
-	Stateful    bool   `json:"stateful"`
-	CursorOwner string `json:"cursorOwner"`
-}
-
-// DumpState implements [fwkplugin.StateDumper]. The payload is fixed and
-// bounded regardless of band or flow cardinality.
-func (p *roundRobin) DumpState() (json.RawMessage, error) {
-	return json.Marshal(roundRobinState{
-		Policy:      RoundRobinFairnessPolicyType,
-		Stateful:    false,
-		CursorOwner: "flow-control registry, per priority band",
-	})
+// StateLocation implements [fwkplugin.StatelessPlugin]. The policy instance holds
+// no state: the per-band rotation cursors are created by NewState and owned by
+// the flow-control registry, one per priority band, so no cursor position is
+// reachable from the plugin.
+func (p *roundRobin) StateLocation() fwkplugin.StateLocation {
+	return fwkplugin.StateLocation{
+		Owner:  "flow-control registry",
+		Reason: "rotation cursors held per priority band",
+	}
 }

@@ -18,7 +18,6 @@ package roundrobin
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol"
 	fwkfcmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol/mocks"
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
 
 const (
@@ -284,13 +284,12 @@ func TestRoundRobin_Pick_Concurrency(t *testing.T) {
 	}
 }
 
-func TestRoundRobin_DumpState(t *testing.T) {
+func TestRoundRobin_StateLocation(t *testing.T) {
 	t.Parallel()
 
-	want := roundRobinState{
-		Policy:      RoundRobinFairnessPolicyType,
-		Stateful:    false,
-		CursorOwner: "flow-control registry, per priority band",
+	want := fwkplugin.StateLocation{
+		Owner:  "flow-control registry",
+		Reason: "rotation cursors held per priority band",
 	}
 
 	tests := []struct {
@@ -299,32 +298,25 @@ func TestRoundRobin_DumpState(t *testing.T) {
 	}{
 		{name: "default name", policy: newRoundRobin("")},
 		{name: "custom name", policy: newRoundRobin("rr-custom")},
-		// Zero-value receiver: the payload is fixed, so the dump must not
-		// depend on constructor-set fields.
+		// Zero-value receiver: the location is fixed, so it must not depend on
+		// constructor-set fields.
 		{name: "zero value", policy: &roundRobin{}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			payload, err := tt.policy.DumpState()
-			require.NoError(t, err)
-			require.True(t, json.Valid(payload), "DumpState must return valid JSON")
-
-			var got roundRobinState
-			require.NoError(t, json.Unmarshal(payload, &got))
-			assert.Equal(t, want, got)
+			assert.Equal(t, want, tt.policy.StateLocation())
 		})
 	}
 }
 
-func TestRoundRobin_DumpState_UnaffectedByPick(t *testing.T) {
+func TestRoundRobin_StateLocation_UnaffectedByPick(t *testing.T) {
 	t.Parallel()
 	policy := newRoundRobin("")
 	ctx := context.Background()
 
-	before, err := policy.DumpState()
-	require.NoError(t, err)
+	before := policy.StateLocation()
 
 	queue1 := &fwkfcmocks.MockFlowQueueAccessor{LenV: 1, FlowKeyV: flow1Key}
 	mockBand := &fwkfcmocks.MockPriorityBandAccessor{
@@ -336,10 +328,7 @@ func TestRoundRobin_DumpState_UnaffectedByPick(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, selected, "Pick should advance the band cursor")
 
-	// The cursor lives in the band's PolicyState, not on the plugin, so the dump
-	// is identical before and after Pick and never carries flow IDs.
-	after, err := policy.DumpState()
-	require.NoError(t, err)
-	assert.JSONEq(t, string(before), string(after))
-	assert.NotContains(t, string(after), flow1ID)
+	// The cursor lives in the band's PolicyState, not on the plugin, so the
+	// reported location is identical before and after Pick.
+	assert.Equal(t, before, policy.StateLocation())
 }

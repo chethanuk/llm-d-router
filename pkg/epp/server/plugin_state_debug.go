@@ -46,6 +46,29 @@ type pluginStateDebugEntry struct {
 	Message string          `json:"message,omitempty"`
 }
 
+// statelessPluginState is the uniform state payload for plugins that declare,
+// via fwkplugin.StatelessPlugin, that they hold no runtime state by design. The
+// handler owns this schema so every stateless plugin reports it identically.
+type statelessPluginState struct {
+	Stateful      bool                    `json:"stateful"`
+	StateLocation fwkplugin.StateLocation `json:"stateLocation"`
+}
+
+// statelessEntry renders the debug entry for a plugin that declares it is
+// stateless by design, distinguishing it from a plugin that simply does not
+// implement any state interface.
+func statelessEntry(name, pluginType string, location fwkplugin.StateLocation) pluginStateDebugEntry {
+	state, err := json.Marshal(statelessPluginState{Stateful: false, StateLocation: location})
+	if err != nil {
+		return pluginStateDebugEntry{
+			Name:    name,
+			Type:    pluginType,
+			Message: fmt.Sprintf("failed to encode stateless plugin state: %v", err),
+		}
+	}
+	return pluginStateDebugEntry{Name: name, Type: pluginType, State: state}
+}
+
 // MetricsHandlerRegistrar registers HTTP handlers on the process metrics/admin server.
 type MetricsHandlerRegistrar interface {
 	AddMetricsServerExtraHandler(path string, handler http.Handler) error
@@ -98,8 +121,11 @@ func collectPluginState(plugins fwkplugin.HandlePlugins) pluginStateDebugRespons
 		}
 		dumper, ok := plugin.(fwkplugin.StateDumper)
 		if !ok {
+			if locator, ok := plugin.(fwkplugin.StatelessPlugin); ok {
+				response.Plugins[name] = statelessEntry(name, plugin.TypedName().Type, locator.StateLocation())
+				continue
+			}
 			response.Plugins[name] = pluginStateDebugEntry{
-
 				Name:    name,
 				Type:    plugin.TypedName().Type,
 				Message: pluginStateUnsupportedText,

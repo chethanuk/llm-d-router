@@ -51,6 +51,25 @@ type StateDumper interface {
 	DumpState() (json.RawMessage, error)
 }
 
+// StatelessPlugin is an optional interface for plugins that hold no runtime
+// state on the instance by design, because their state lives elsewhere (for
+// example in a shared registry). The debug endpoint renders a uniform
+// "stateless by design, state lives at <owner>" entry for these plugins instead
+// of the generic unsupported message. A plugin implements this or StateDumper,
+// not both.
+type StatelessPlugin interface {
+	// StateLocation returns where the plugin's runtime state actually lives.
+	StateLocation() StateLocation
+}
+
+// StateLocation describes where a stateless plugin's runtime state resides.
+type StateLocation struct {
+	// Owner names the component that holds the state, e.g. "flow-control registry".
+	Owner string `json:"owner"`
+	// Reason optionally explains the arrangement in one short phrase.
+	Reason string `json:"reason,omitempty"`
+}
+
 // ConsumerPlugin defines the interface for a consumer.
 type ConsumerPlugin interface {
 	Plugin
