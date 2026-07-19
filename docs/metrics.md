@@ -15,8 +15,8 @@ A metric's full Prometheus name is `<subsystem>_<name>`. The EPP uses two curren
 
 Earlier releases emitted metrics under `llm_d_inference_scheduler_`, `inference_objective_`,
 `inference_pool_`, `inference_extension_`, and `kvcache_`. Those prefixes are **deprecated** but
-still emitted: each recorder writes both the legacy series and its current twin (dual emission), so
-existing dashboards keep working during migration. See [Deprecated series](#deprecated-series).
+still emitted: each recorder that has a deprecated predecessor writes both the legacy series and its
+current twin (dual emission), so existing dashboards keep working during migration. See [Deprecated series](#deprecated-series).
 
 ## Scrape topology
 
