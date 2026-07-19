@@ -18,6 +18,7 @@ package requestcontrol
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -206,6 +207,58 @@ func TestConfig_OrderPlugins_EdgeCases(t *testing.T) {
 			cfg.AddPlugins(tc.plugins...)
 			cfg.OrderPlugins(tc.sortedNames)
 			assert.Equal(t, tc.wantPreReq, names(cfg.preRequestPlugins))
+		})
+	}
+}
+
+// TestConfig_OrderPlugins_InputOrderIndependent is the core #1856/#2040 invariant:
+// AddPlugins receives plugins in Go's randomized map-iteration order (from
+// GetAllPlugins), so the ordered hook lists must be a pure function of the DAG and
+// the plugin names, not of the order plugins were handed over. Each fixed permutation
+// below stands in for one possible map-iteration order and must produce the same
+// result.
+func TestConfig_OrderPlugins_InputOrderIndependent(t *testing.T) {
+	key := fwkplugin.NewDataKey("orderTestData", "mock")
+	// Base set indexed for permutation: 0=P (producer), 1=C (consumer), 2=U1, 3=U2.
+	newSet := func() []fwkplugin.Plugin {
+		return []fwkplugin.Plugin{
+			&hookPlugin{name: "P", produces: map[fwkplugin.DataKey]any{key: &orderTestData{}}},
+			&hookPlugin{name: "C", consumes: map[fwkplugin.DataKey]any{key: &orderTestData{}}},
+			&unrankedPlugin{name: "U1"},
+			&unrankedPlugin{name: "U2"},
+		}
+	}
+	// Producer before consumer (DAG); unranked appended by name. Identical for every
+	// input order.
+	wantPreReq := []string{"P/mock", "C/mock", "U1/mock", "U2/mock"}
+	wantRanked := []string{"P/mock", "C/mock"} // lists the unranked plugins do not join
+
+	permutations := [][]int{
+		{0, 1, 2, 3},
+		{3, 2, 1, 0},
+		{1, 3, 0, 2},
+		{2, 0, 3, 1},
+	}
+	for _, perm := range permutations {
+		t.Run(fmt.Sprintf("input order %v", perm), func(t *testing.T) {
+			base := newSet()
+			shuffled := make([]fwkplugin.Plugin, len(perm))
+			for i, idx := range perm {
+				shuffled[i] = base[idx]
+			}
+
+			cfg := NewConfig()
+			cfg.AddPlugins(shuffled...)
+			sorted, err := datalayer.ValidateAndOrderDataDependencies(shuffled)
+			require.NoError(t, err)
+			cfg.OrderPlugins(sorted)
+
+			assert.Equal(t, wantPreReq, names(cfg.preRequestPlugins), "preRequest")
+			assert.Equal(t, wantRanked, names(cfg.requestHeaderPlugins), "requestHeader")
+			assert.Equal(t, wantRanked, names(cfg.admissionPlugins), "admission")
+			assert.Equal(t, wantRanked, names(cfg.responseReceivedPlugins), "responseReceived")
+			assert.Equal(t, wantRanked, names(cfg.responseStreamingPlugins), "responseStreaming")
+			assert.Equal(t, wantRanked, names(cfg.dataProducerPlugins), "dataProducer")
 		})
 	}
 }
