@@ -73,6 +73,12 @@ const (
 
 	// mockDataSourceType is the plugin type name used for the mock data source in integration tests.
 	mockDataSourceType = "mock-metrics-source"
+
+	// portBindMaxAttempts bounds how many times the harness re-rolls free ports and
+	// restarts the manager when a port is stolen before the server binds it (issue
+	// #1066). portBindRetryDelay paces the retries so a transient port grab can clear.
+	portBindMaxAttempts = 5
+	portBindRetryDelay  = 500 * time.Millisecond
 )
 
 //go:embed testdata/datalayer-config.yaml
@@ -203,25 +209,8 @@ func NewTestHarness(ctx context.Context, t *testing.T, opts ...HarnessOption) *T
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespaceName}}
 	require.NoError(t, k8sClient.Create(ctx, ns), "failed to create test namespace")
 
-	eppOptions := defaultEppServerOptions(t, testNamespaceName, configText)
-	if config.runMode == modeStandalone && config.standaloneStrategy == strategyNoCRD {
-		// Only standalone EPP without crd need to set the EndpointSelector.
-		eppOptions.EndpointSelector = labels.SelectorFromSet(labels.Set{"app": testPoolName})
-	}
-
-	// Shorten the Prometheus refresh interval so WaitForReadyPodsMetric (10s timeout)
-	// has many opportunities to observe the metric update instead of only ~2.
-	eppOptions.RefreshPrometheusMetricsInterval = 500 * time.Millisecond
-
-	mockDataSource := dlmocks.NewDataSource(plugin.TypedName{
-		Type: mockDataSourceType,
-		Name: mockDataSourceType,
-	})
-	runner, mgr, dataStore, err := eppRunner.NewTestRunnerSetup(ctx, testEnv.Config, eppOptions, mockDataSource)
-	require.NoError(t, err, "failed to create manager")
-	backend := metricsBackend(&mockDataSourceBackend{mockDataSource: mockDataSource})
-
-	// Tracing Setup (InMemory)
+	// Tracing Setup (InMemory). Global and port-independent, so it is configured once
+	// rather than per port-bind attempt below.
 	var exporter *tracetest.InMemoryExporter
 	var tp *sdktrace.TracerProvider
 	if config.Tracing {
@@ -232,19 +221,70 @@ func NewTestHarness(ctx context.Context, t *testing.T, opts ...HarnessOption) *T
 		otel.SetTracerProvider(tp)
 	}
 
-	mgrCtx, mgrCancel := context.WithCancel(ctx)
+	// defaultEppServerOptions picks free ports (GetFreePort) that the manager binds a
+	// moment later. The OS can hand a freed port to another process in that window, so
+	// the bind intermittently fails with "address already in use" (issue #1066). Re-roll
+	// the ports and restart the manager on that specific failure, bounded so a genuine
+	// bind bug still fails loud.
+	var (
+		eppOptions *eppServer.Options
+		runner     *eppRunner.Runner
+		dataStore  datastore.Datastore
+		backend    metricsBackend
+		mgrCtx     context.Context
+		mgrCancel  context.CancelFunc
+		mgrDone    chan struct{}
+	)
+	attempt := func() error {
+		eppOptions = defaultEppServerOptions(t, testNamespaceName, configText)
+		if config.runMode == modeStandalone && config.standaloneStrategy == strategyNoCRD {
+			// Only standalone EPP without crd need to set the EndpointSelector.
+			eppOptions.EndpointSelector = labels.SelectorFromSet(labels.Set{"app": testPoolName})
+		}
 
-	// Start Manager.
-	mgrDone := make(chan struct{})
-	go func() {
-		defer close(mgrDone)
-		if err := mgr.Start(mgrCtx); err != nil {
+		// Shorten the Prometheus refresh interval so WaitForReadyPodsMetric (10s timeout)
+		// has many opportunities to observe the metric update instead of only ~2.
+		eppOptions.RefreshPrometheusMetricsInterval = 500 * time.Millisecond
+
+		mockDataSource := dlmocks.NewDataSource(plugin.TypedName{
+			Type: mockDataSourceType,
+			Name: mockDataSourceType,
+		})
+		r, mgr, ds, err := eppRunner.NewTestRunnerSetup(ctx, testEnv.Config, eppOptions, mockDataSource)
+		if err != nil {
+			// Not a port-bind race; surfaced as-is (RetryOnAddrInUse will not retry it).
+			return fmt.Errorf("failed to create manager: %w", err)
+		}
+		runner, dataStore = r, ds
+		backend = metricsBackend(&mockDataSourceBackend{mockDataSource: mockDataSource})
+
+		mgrCtx, mgrCancel = context.WithCancel(ctx)
+		mgrDone = make(chan struct{})
+		mgrErr := make(chan error, 1)
+		go func() {
+			defer close(mgrDone)
+			err := mgr.Start(mgrCtx)
+			mgrErr <- err
 			// Context cancellation is expected during teardown.
-			if !strings.Contains(err.Error(), "context canceled") {
+			if err != nil && !strings.Contains(err.Error(), "context canceled") {
 				logger.Error(err, "manager stopped unexpectedly")
 			}
+		}()
+
+		// Wait until the ext-proc server binds, or the manager reports an early bind
+		// failure. On failure, stop this attempt's manager and wait for its listeners to
+		// release before the next GetFreePort round.
+		if err := integration.WaitExtProcReady(eppOptions.GRPCPort, mgrErr); err != nil {
+			mgrCancel()
+			<-mgrDone
+			return err
 		}
-	}()
+		return nil
+	}
+	require.NoError(t,
+		integration.RetryOnAddrInUse(portBindMaxAttempts, portBindRetryDelay, attempt, metrics.Reset),
+		"EPP manager failed to bind its ports",
+	)
 
 	extProcClient, conn := integration.ExtProcServerClient(
 		mgrCtx,

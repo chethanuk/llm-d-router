@@ -26,10 +26,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -616,6 +619,86 @@ func ExtProcServerClient(
 	require.NoError(t, err, "failed to initialize ext_proc stream client")
 
 	return extProcClient, conn
+}
+
+// isAddrInUse reports whether err is (or wraps) a "port already in use" bind failure.
+// GetFreePort returns a vacated port, and the server binds it later; if the OS handed
+// the port to something else in that window the bind fails with EADDRINUSE, which is
+// what this detects so the caller can re-roll the port and retry (issue #1066).
+func isAddrInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return true
+	}
+	// Fall back to the message for errors that were stringified across a boundary
+	// and no longer unwrap to syscall.EADDRINUSE.
+	return strings.Contains(strings.ToLower(err.Error()), "address already in use")
+}
+
+// RetryOnAddrInUse runs attempt up to maxAttempts times, retrying only when attempt
+// returns an address-in-use bind failure. Any other error (or success) returns
+// immediately. reset, when non-nil, runs between attempts (after a failed attempt has
+// released its resources, before the next one) to clear per-attempt state. A genuine
+// bind failure that never clears surfaces as a wrapped error after the budget, so it
+// still fails loud rather than being masked.
+func RetryOnAddrInUse(maxAttempts int, delay time.Duration, attempt func() error, reset func()) error {
+	var err error
+	for i := 0; i < maxAttempts; i++ {
+		if i > 0 {
+			if reset != nil {
+				reset()
+			}
+			time.Sleep(delay)
+		}
+		if err = attempt(); err == nil {
+			return nil
+		}
+		if !isAddrInUse(err) {
+			return err
+		}
+	}
+	return fmt.Errorf("port bind failed after %d attempts: %w", maxAttempts, err)
+}
+
+// WaitExtProcReady blocks until the ext-proc gRPC server on port accepts a TCP
+// connection (ready, returns nil), the manager reports an early error via mgrErr
+// (returned so the caller can decide whether to retry), or extprocConnSetupTimeout
+// elapses (a non-EADDRINUSE error so a server that never binds fails loud instead of
+// looping). Unlike ExtProcServerClient it does not fail the test, so a caller can
+// retry a port-bind race.
+func WaitExtProcReady(port int, mgrErr <-chan error) error {
+	serverAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	timeout := time.After(extprocConnSetupTimeout)
+	for {
+		// Prefer an early manager error (e.g. a stolen port) over polling.
+		select {
+		case err := <-mgrErr:
+			if err == nil {
+				return errors.New("manager exited before ext-proc server became ready")
+			}
+			return err
+		case <-timeout:
+			return fmt.Errorf("server failed to bind port %s within %s", serverAddr, extprocConnSetupTimeout)
+		default:
+		}
+
+		if conn, err := net.DialTimeout("tcp", serverAddr, extPorcConnSetupPollInterval); err == nil {
+			_ = conn.Close()
+			// The gRPC port is up; make sure another runnable (metrics/health) did not
+			// fail its bind concurrently before declaring the manager ready.
+			select {
+			case err := <-mgrErr:
+				if err != nil {
+					return err
+				}
+			default:
+			}
+			return nil
+		}
+		time.Sleep(extPorcConnSetupPollInterval)
+	}
 }
 
 // --- Internal Helpers ---
