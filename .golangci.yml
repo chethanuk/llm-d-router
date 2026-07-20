@@ -89,6 +89,8 @@ linters:
           alias: fwkgaie
         - pkg: github.com/llm-d/llm-d-router/test/framework/epp
           alias: fwkepp
+        - pkg: github.com/llm-d/llm-d-router/test/framework/epp/harness
+          alias: eppharness
     revive: # see https://github.com/mgechev/revive#available-rules for all options
       rules:
         - name: blank-imports

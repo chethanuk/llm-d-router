@@ -14,7 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package epp
+// Package harness boots a shared envtest environment and per-test EPP servers for
+// integration suites.
+//
+// It sits at the top of the framework layering and may import anything, including
+// pkg/epp/server and cmd/epp/runner; only integration and e2e suites import it.
+package harness
 
 import (
 	"context"
@@ -23,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -616,4 +622,61 @@ func (h *TestHarness) ExpectMetrics(expected map[string]string) {
 			h.t.Errorf("Metric mismatch for %s: %v", name, err)
 		}
 	}
+}
+
+// --- Data Structures & Metrics Helpers ---
+
+type PodState struct {
+	index        int
+	queueSize    int
+	kvCacheUsage float64
+	activeModels []string
+}
+
+// P constructs a Pod State: Index, Queue, KV%, Models...
+// Usage: P(0, 5, 0.2, "model-a")
+func P(idx int, q int, kv float64, models ...string) PodState {
+	return PodState{index: idx, queueSize: q, kvCacheUsage: kv, activeModels: models}
+}
+
+type label struct{ name, value string }
+
+func labelsToString(labels []label) string {
+	parts := make([]string, len(labels))
+	for i, l := range labels {
+		parts[i] = fmt.Sprintf("%s=%q", l.name, l.value)
+	}
+	return strings.Join(parts, ",")
+}
+
+// MetricReqTotal renders the expected inference_objective_request_total exposition text.
+func MetricReqTotal(model, target string, priority int) string {
+	return fmt.Sprintf(`
+    # HELP inference_objective_request_total [ALPHA] [Deprecated: Use llm_d_epp_request_total] Counter of inference objective requests broken out for each model and target model.
+    # TYPE inference_objective_request_total counter
+    inference_objective_request_total{%s} 1
+    `, labelsToString([]label{{"model_name", model}, {"priority", strconv.Itoa(priority)}, {"target_model_name", target}}))
+}
+
+// MetricReadyPods renders the expected inference_pool_ready_pods exposition text.
+func MetricReadyPods(count int) string {
+	return fmt.Sprintf(`
+    # HELP inference_pool_ready_pods [ALPHA] [Deprecated: Use llm_d_epp_ready_endpoints] The number of ready pods in the inference server pool.
+    # TYPE inference_pool_ready_pods gauge
+    inference_pool_ready_pods{%s} %d
+    `, labelsToString([]label{{"name", TestPoolName}}), count)
+}
+
+// CleanMetric removes indentation from multiline metric strings and ensures a trailing newline exists, which is
+// required by the Prometheus text parser.
+func CleanMetric(s string) string {
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return strings.Join(cleaned, "\n") + "\n"
 }
