@@ -36,6 +36,7 @@ import (
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
+	eppharness "github.com/llm-d/llm-d-router/test/framework/epp/harness"
 )
 
 const (
@@ -47,24 +48,24 @@ const (
 	inferenceObjectiveWithPriority4 = "inference-objective-with-priority-4"
 )
 
-func TestMain(m *testing.M) { os.Exit(Run(m)) }
+func TestMain(m *testing.M) { os.Exit(eppharness.Run(m)) }
 
 func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 	// executionModes defines the permutations of EPP deployment modes to test.
 	executionModes := []struct {
 		name     string
-		mode     RunMode
-		strategy StandaloneStrategy
+		mode     eppharness.RunMode
+		strategy eppharness.StandaloneStrategy
 	}{
-		{name: "Standard", mode: ModeStandard},
-		{name: "Standalone-NoCRD", mode: ModeStandalone, strategy: StrategyNoCRD},
-		{name: "Standalone-WithCRD", mode: ModeStandalone, strategy: StrategyWithCRD},
+		{name: "Standard", mode: eppharness.ModeStandard},
+		{name: "Standalone-NoCRD", mode: eppharness.ModeStandalone, strategy: eppharness.StrategyNoCRD},
+		{name: "Standalone-WithCRD", mode: eppharness.ModeStandalone, strategy: eppharness.StrategyWithCRD},
 	}
 
 	for _, executionMode := range executionModes {
 		t.Run(executionMode.name, func(t *testing.T) {
 			// Determine if we are running in the standalone mode without CRDs
-			isNoCRD := executionMode.mode == ModeStandalone && executionMode.strategy == StrategyNoCRD
+			isNoCRD := executionMode.mode == eppharness.ModeStandalone && executionMode.strategy == eppharness.StrategyNoCRD
 
 			// Helper function to override priority to 0 when in NoCRD mode
 			prio := func(p int) int {
@@ -77,15 +78,15 @@ func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 			hermeticTests := []testCase{
 				{
 					name:     "select lora despite higher kv cache (affinity)",
-					requests: fwkepp.ReqLLM(Logger(), "test3", modelSQLLora, modelSQLLoraTarget),
-					pods: []PodState{
-						P(0, 10, 0.2, "foo", "bar"),
-						P(1, 10, 0.4, "foo", modelSQLLoraTarget), // Winner (Affinity overrides KV)
-						P(2, 10, 0.3, "foo"),
+					requests: fwkepp.ReqLLM(eppharness.Logger(), "test3", modelSQLLora, modelSQLLoraTarget),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 10, 0.2, "foo", "bar"),
+						eppharness.P(1, 10, 0.4, "foo", modelSQLLoraTarget), // Winner (Affinity overrides KV)
+						eppharness.P(2, 10, 0.3, "foo"),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.2:8000", modelSQLLoraTarget, "test3"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
 					},
 				},
 				{
@@ -118,28 +119,28 @@ dataLayer:
 						},
 						"passthrough-parser",
 					),
-					pods: []PodState{
-						P(0, 3, 0.2),
-						P(1, 0, 0.1), // Winner
-						P(2, 10, 0.2),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 3, 0.2),
+						eppharness.P(1, 0, 0.1), // Winner
+						eppharness.P(2, 10, 0.2),
 					},
 					wantResponses: ExpectPassthroughRouteTo("192.168.1.2:8000", []byte("passthrough-parser")),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal("", "", prio(2))),
-						"inference_pool_ready_pods":         CleanMetric(MetricReadyPods(3)),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal("", "", prio(2))),
+						"inference_pool_ready_pods":         eppharness.CleanMetric(eppharness.MetricReadyPods(3)),
 					},
 				},
 				{
 					name:     "do not shed requests by default",
-					requests: fwkepp.ReqLLM(Logger(), "test4", modelSQLLora, modelSQLLoraTarget),
-					pods: []PodState{
-						P(0, 6, 0.2, "foo", "bar", modelSQLLoraTarget), // Winner (Lowest saturated)
-						P(1, 0, 0.85, "foo"),
-						P(2, 10, 0.9, "foo"),
+					requests: fwkepp.ReqLLM(eppharness.Logger(), "test4", modelSQLLora, modelSQLLoraTarget),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 6, 0.2, "foo", "bar", modelSQLLoraTarget), // Winner (Lowest saturated)
+						eppharness.P(1, 0, 0.85, "foo"),
+						eppharness.P(2, 10, 0.9, "foo"),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelSQLLoraTarget, "test4"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
 					},
 				},
 
@@ -150,8 +151,8 @@ dataLayer:
 						map[string]string{"hi": "mom"},
 						"no healthy upstream",
 					),
-					pods: []PodState{
-						P(0, 0, 0.2, "foo", "bar"),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 0, 0.2, "foo", "bar"),
 					},
 					wantResponses: ExpectReject(
 						envoyTypePb.StatusCode_BadRequest,
@@ -170,13 +171,13 @@ dataLayer:
 						`{"max_tokens":100,"model":"sql-lo`,
 						`ra-sheddable","prompt":"test6","temperature":0}`,
 					),
-					pods: []PodState{
-						P(0, 4, 0.2, "foo", "bar", modelSheddableTarget),
-						P(1, 4, 0.85, "foo", modelSheddableTarget),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 4, 0.2, "foo", "bar", modelSheddableTarget),
+						eppharness.P(1, 4, 0.85, "foo", modelSheddableTarget),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelSheddableTarget, "test6"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSheddable, modelSheddableTarget, prio(0))),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal(modelSheddable, modelSheddableTarget, prio(0))),
 					},
 				},
 				{
@@ -190,10 +191,10 @@ dataLayer:
 						imagesEditsBody[:40],
 						imagesEditsBody[40:],
 					),
-					pods: []PodState{
-						P(0, 3, 0.2),
-						P(1, 0, 0.1), // Winner (Low Queue, Low KV)
-						P(2, 10, 0.2),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 3, 0.2),
+						eppharness.P(1, 0, 0.1), // Winner (Low Queue, Low KV)
+						eppharness.P(2, 10, 0.2),
 					},
 					wantResponses: expectImagesEditsRouteTo("192.168.1.2:8000"),
 				},
@@ -232,29 +233,29 @@ dataLayer:
 					// Only pods in the subset list are eligible.
 					requests: ReqSubset("test2", modelSQLLora, modelSQLLoraTarget,
 						"192.168.1.1:8000", "192.168.1.2:8000", "192.168.1.3:8000"),
-					pods: []PodState{
-						P(0, 0, 0.2, "foo"),
-						P(1, 0, 0.1, "foo", modelSQLLoraTarget), // Winner (Low Queue + Matches Subset)
-						P(2, 10, 0.2, "foo"),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 0, 0.2, "foo"),
+						eppharness.P(1, 0, 0.1, "foo", modelSQLLoraTarget), // Winner (Low Queue + Matches Subset)
+						eppharness.P(2, 10, 0.2, "foo"),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.2:8000", modelSQLLoraTarget, "test2"),
 				},
 				{
 					name:     "subsetting: partial match",
 					requests: ReqSubset("test2", modelSQLLora, modelSQLLoraTarget, "192.168.1.3:8000"),
-					pods: []PodState{
-						P(0, 0, 0.2, "foo"),
-						P(1, 0, 0.1, "foo", modelSQLLoraTarget),
-						P(2, 10, 0.2, "foo"), // Winner (Matches Subset, despite load)
+					pods: []eppharness.PodState{
+						eppharness.P(0, 0, 0.2, "foo"),
+						eppharness.P(1, 0, 0.1, "foo", modelSQLLoraTarget),
+						eppharness.P(2, 10, 0.2, "foo"), // Winner (Matches Subset, despite load)
 					},
 					wantResponses: ExpectRouteTo("192.168.1.3:8000", modelSQLLoraTarget, "test2"),
 				},
 				{
 					name:     "subsetting: no pods match",
 					requests: ReqSubset("test2", modelSQLLora, modelSQLLoraTarget, "192.168.1.99:8000"),
-					pods: []PodState{
-						P(0, 0, 0.2, "foo"),
-						P(1, 0, 0.1, "foo", modelSQLLoraTarget),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 0, 0.2, "foo"),
+						eppharness.P(1, 0, 0.1, "foo", modelSQLLoraTarget),
 					},
 					wantResponses: ExpectRejectWithDropReason(envoyTypePb.StatusCode_ServiceUnavailable,
 						"inference error: ServiceUnavailable - failed to find endpoint candidates for serving the request",
@@ -274,23 +275,23 @@ dataLayer:
 						`{"max_tokens":100,"model":"direct-`,
 						`model","prompt":"test6","temperature":0}`,
 					),
-					pods: []PodState{
-						P(0, 4, 0.2, "foo", "bar", modelSheddableTarget),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 4, 0.2, "foo", "bar", modelSheddableTarget),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelDirect, "test6"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelDirect, modelDirect, prio(2))),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal(modelDirect, modelDirect, prio(2))),
 					},
 				},
 				{
 					name:     "rewrite request model",
-					requests: fwkepp.ReqLLM(Logger(), "test-rewrite", modelToBeWritten, modelToBeWritten),
-					pods: []PodState{
-						P(0, 0, 0.1, "foo", modelAfterRewrite),
+					requests: fwkepp.ReqLLM(eppharness.Logger(), "test-rewrite", modelToBeWritten, modelToBeWritten),
+					pods: []eppharness.PodState{
+						eppharness.P(0, 0, 0.1, "foo", modelAfterRewrite),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelAfterRewrite, "test-rewrite"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelToBeWritten, modelAfterRewrite, prio(0))),
+						"inference_objective_request_total": eppharness.CleanMetric(eppharness.MetricReqTotal(modelToBeWritten, modelAfterRewrite, prio(0))),
 					},
 					requiresCRDs: true,
 				},
@@ -300,7 +301,7 @@ dataLayer:
 						"content-type": "text/event-stream",
 						"status":       "200",
 					}),
-					pods:          []PodState{P(0, 0, 0, "foo")},
+					pods:          []eppharness.PodState{eppharness.P(0, 0, 0, "foo")},
 					wantResponses: nil,
 				},
 
@@ -312,7 +313,7 @@ dataLayer:
 						`{"max_tokens":100,"model":"sql-lo`,
 						`ra-sheddable","prompt":"test6","temperature":0}`,
 					),
-					pods: []PodState{P(0, 4, 0.2, modelSheddableTarget)},
+					pods: []eppharness.PodState{eppharness.P(0, 4, 0.2, modelSheddableTarget)},
 					wantResponses: ExpectBufferResp(
 						fmt.Sprintf(`{"max_tokens":100,"model":%q,"prompt":"test6","temperature":0}`, modelSheddable),
 						"application/json"),
@@ -323,7 +324,7 @@ dataLayer:
 						map[string]string{"content-type": "application/json"},
 						"no healthy upstream",
 					),
-					pods:          []PodState{P(0, 4, 0.2, modelSheddableTarget)},
+					pods:          []eppharness.PodState{eppharness.P(0, 4, 0.2, modelSheddableTarget)},
 					wantResponses: ExpectBufferResp("no healthy upstream", "application/json"),
 				},
 				{
@@ -333,7 +334,7 @@ dataLayer:
 						`{"max_tokens":100,"model":"sql-lora-sheddable","prompt":"test6","temperature":0}`,
 						"",
 					),
-					pods: []PodState{P(0, 4, 0.2, modelSheddableTarget)},
+					pods: []eppharness.PodState{eppharness.P(0, 4, 0.2, modelSheddableTarget)},
 					wantResponses: ExpectBufferResp(
 						fmt.Sprintf(`{"max_tokens":100,"model":%q,"prompt":"test6","temperature":0}`, modelSheddable),
 						"application/json"),
@@ -348,7 +349,7 @@ dataLayer:
 						`data: {"usage":{"prompt_tokens":7,"total_tokens":17,"completion_tokens":10}}`+"\n"+`data: [DONE]`,
 						"", // EndOfStream
 					),
-					pods:         []PodState{P(0, 4, 0.2, modelSheddableTarget)},
+					pods:         []eppharness.PodState{eppharness.P(0, 4, 0.2, modelSheddableTarget)},
 					waitForModel: modelSheddable,
 					wantResponses: ExpectStreamResp(
 						`data: {}`,
@@ -357,7 +358,7 @@ dataLayer:
 					),
 					// Labels are empty because we skipped the Request phase.
 					wantMetrics: map[string]string{
-						"inference_objective_input_tokens": CleanMetric(`
+						"inference_objective_input_tokens": eppharness.CleanMetric(`
               # HELP inference_objective_input_tokens [ALPHA] [Deprecated: Use llm_d_epp_request_input_tokens] Inference objective input token count distribution for requests in each model.
               # TYPE inference_objective_input_tokens histogram
               inference_objective_input_tokens_bucket{model_name="",target_model_name="",le="1"} 0
@@ -396,26 +397,26 @@ dataLayer:
 
 					ctx := t.Context()
 
-					var h *TestHarness
-					var harnessOpts []HarnessOption
+					var h *eppharness.TestHarness
+					var harnessOpts []eppharness.HarnessOption
 
 					if len(tc.wantSpans) > 0 {
-						harnessOpts = append(harnessOpts, WithTracing())
+						harnessOpts = append(harnessOpts, eppharness.WithTracing())
 					}
 
-					if executionMode.mode == ModeStandalone {
-						harnessOpts = append(harnessOpts, WithStandaloneMode(executionMode.strategy))
+					if executionMode.mode == eppharness.ModeStandalone {
+						harnessOpts = append(harnessOpts, eppharness.WithStandaloneMode(executionMode.strategy))
 					} else {
-						harnessOpts = append(harnessOpts, WithStandardMode())
+						harnessOpts = append(harnessOpts, eppharness.WithStandardMode())
 					}
 
 					if tc.configText != "" {
-						harnessOpts = append(harnessOpts, WithConfigText(tc.configText))
+						harnessOpts = append(harnessOpts, eppharness.WithConfigText(tc.configText))
 					}
 
-					h = NewTestHarness(ctx, t, harnessOpts...)
+					h = eppharness.NewTestHarness(ctx, t, harnessOpts...)
 
-					if executionMode.mode == ModeStandard || executionMode.strategy == StrategyWithCRD {
+					if executionMode.mode == eppharness.ModeStandard || executionMode.strategy == eppharness.StrategyWithCRD {
 						h = h.WithBaseResources()
 					}
 
