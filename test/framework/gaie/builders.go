@@ -15,7 +15,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package testing
+// Package gaie provides builders for GAIE and apix inference CRDs used in tests.
+package gaie
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
