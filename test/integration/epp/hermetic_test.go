@@ -47,7 +47,7 @@ import (
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
-	integration "github.com/llm-d/llm-d-router/test/integration"
+	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
 )
 
 const (
@@ -144,7 +144,7 @@ func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 			hermeticTests := []testCase{
 				{
 					name:     "select lora despite higher kv cache (affinity)",
-					requests: integration.ReqLLM(logger, "test3", modelSQLLora, modelSQLLoraTarget),
+					requests: fwkepp.ReqLLM(logger, "test3", modelSQLLora, modelSQLLoraTarget),
 					pods: []PodState{
 						P(0, 10, 0.2, "foo", "bar"),
 						P(1, 10, 0.4, "foo", modelSQLLoraTarget), // Winner (Affinity overrides KV)
@@ -177,7 +177,7 @@ dataLayer:
   sources:
   - pluginRef: mock-metrics-source
 `,
-					requests: integration.ReqRaw(
+					requests: fwkepp.ReqRaw(
 						map[string]string{
 							"hi":                         "mom",
 							reqcommon.RequestIDHeaderKey: "test-request-id",
@@ -198,7 +198,7 @@ dataLayer:
 				},
 				{
 					name:     "do not shed requests by default",
-					requests: integration.ReqLLM(logger, "test4", modelSQLLora, modelSQLLoraTarget),
+					requests: fwkepp.ReqLLM(logger, "test4", modelSQLLora, modelSQLLoraTarget),
 					pods: []PodState{
 						P(0, 6, 0.2, "foo", "bar", modelSQLLoraTarget), // Winner (Lowest saturated)
 						P(1, 0, 0.85, "foo"),
@@ -213,7 +213,7 @@ dataLayer:
 				// --- Error Handling & Edge Cases ----
 				{
 					name: "invalid json body",
-					requests: integration.ReqRaw(
+					requests: fwkepp.ReqRaw(
 						map[string]string{"hi": "mom"},
 						"no healthy upstream",
 					),
@@ -227,7 +227,7 @@ dataLayer:
 				},
 				{
 					name: "split body across chunks",
-					requests: integration.ReqRaw(
+					requests: fwkepp.ReqRaw(
 						map[string]string{
 							"hi":                         "mom",
 							metadata.ObjectiveKey:        modelSheddable,
@@ -248,14 +248,14 @@ dataLayer:
 				},
 				{
 					name:     "no backend pods available",
-					requests: integration.ReqHeaderOnly(map[string]string{"content-type": "application/json"}),
+					requests: fwkepp.ReqHeaderOnly(map[string]string{"content-type": "application/json"}),
 					pods:     nil,
 					wantResponses: ExpectReject(envoyTypePb.StatusCode_InternalServerError,
 						"inference error: Internal - no pods available in datastore"),
 				},
 				{
 					name: "request missing model field",
-					requests: integration.ReqRaw(
+					requests: fwkepp.ReqRaw(
 						map[string]string{"content-type": "application/json"},
 						`{"prompt":"hello world"}`,
 					),
@@ -300,7 +300,7 @@ dataLayer:
 				// --- Request Modification (Passthrough & Rewrite) ---
 				{
 					name: "passthrough: model not in objectives",
-					requests: integration.ReqRaw(
+					requests: fwkepp.ReqRaw(
 						map[string]string{
 							"hi":                         "mom",
 							metadata.ObjectiveKey:        modelDirect,
@@ -320,7 +320,7 @@ dataLayer:
 				},
 				{
 					name:     "rewrite request model",
-					requests: integration.ReqLLM(logger, "test-rewrite", modelToBeWritten, modelToBeWritten),
+					requests: fwkepp.ReqLLM(logger, "test-rewrite", modelToBeWritten, modelToBeWritten),
 					pods: []PodState{
 						P(0, 0, 0.1, "foo", modelAfterRewrite),
 					},
@@ -332,7 +332,7 @@ dataLayer:
 				},
 				{
 					name: "protocol: simple GET (header only)",
-					requests: integration.ReqHeaderOnly(map[string]string{
+					requests: fwkepp.ReqHeaderOnly(map[string]string{
 						"content-type": "text/event-stream",
 						"status":       "200",
 					}),
@@ -467,7 +467,7 @@ dataLayer:
 						h.WaitForReadyPodsMetric(len(tc.pods))
 					}
 
-					responses, err := integration.StreamedRequest(t, h.Client, tc.requests, len(tc.wantResponses))
+					responses, err := fwkepp.StreamedRequest(t, h.Client, tc.requests, len(tc.wantResponses))
 					require.NoError(t, err)
 
 					if diff := cmp.Diff(tc.wantResponses, responses,
