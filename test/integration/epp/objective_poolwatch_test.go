@@ -53,6 +53,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/controller"
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/datastore"
+	eppharness "github.com/llm-d/llm-d-router/test/framework/epp/harness"
 	fwkgaie "github.com/llm-d/llm-d-router/test/framework/gaie"
 )
 
@@ -70,7 +71,7 @@ func startObjectiveEnv(t *testing.T, crdDir string) *rest.Config {
 	env := &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join(gaieModulePath, "config", "crd", "bases"),
-			filepath.Join(repoRootPath, "test", "integration", "epp", "testdata", crdDir),
+			filepath.Join(eppharness.RepoRoot(), "test", "integration", "epp", "testdata", crdDir),
 		},
 		ErrorIfCRDPathMissing: true,
 	}
