@@ -29,7 +29,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	sessionaffinity "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/sessionaffinity"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestSessionAffinity_Filter(t *testing.T) {
@@ -261,7 +261,7 @@ func TestSessionAffinity_ResponseHeader(t *testing.T) {
 		},
 	}
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

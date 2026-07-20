@@ -17,11 +17,11 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/prefix"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestPdProfileHandlerFactory(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	tests := []struct {
 		name       string
 		pluginName string
@@ -137,7 +137,7 @@ func TestPdProfileHandlerFactory(t *testing.T) {
 }
 
 func TestPdProfileHandlerFactoryInvalidJSON(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	invalidTests := []struct {
 		name       string
@@ -242,7 +242,7 @@ func getProfilesFromResult(result map[string]scheduling.SchedulerProfile) []stri
 }
 
 func TestPdProfileHandler_Pick(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	request := createRequest("hello world hello world hello world")
 
 	profiles := map[string]scheduling.SchedulerProfile{

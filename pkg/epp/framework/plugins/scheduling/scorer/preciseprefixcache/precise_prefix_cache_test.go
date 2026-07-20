@@ -34,13 +34,13 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	preciseproducer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/dataproducer/preciseprefixcache"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 // In self-host mode the plugin satisfies Scorer, DataProducer, PreRequest,
 // and EndpointExtractor.
 func TestPluginFactory_SelfHostInterfaces(t *testing.T) {
-	handle := fwkplugin.NewEppHandle(utils.NewTestContext(t), nil,
+	handle := fwkplugin.NewEppHandle(fwkcontext.NewTestContext(t), nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
 	plg, err := PluginFactory("test", fwkplugin.StrictDecoder(json.RawMessage(`{}`)), handle)
@@ -59,7 +59,7 @@ func TestPluginFactory_SelfHostInterfaces(t *testing.T) {
 // The inner scorer's Consumes set must include every key the inner producer
 // Produces, so the data-layer DAG links them.
 func TestPluginFactory_InnerScorerConsumesProducerKeys(t *testing.T) {
-	handle := fwkplugin.NewEppHandle(utils.NewTestContext(t), nil,
+	handle := fwkplugin.NewEppHandle(fwkcontext.NewTestContext(t), nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
 	plg, err := PluginFactory("test", fwkplugin.StrictDecoder(json.RawMessage(`{}`)), handle)
@@ -79,7 +79,7 @@ func TestPluginFactory_InnerScorerConsumesProducerKeys(t *testing.T) {
 // With a precise-prefix-cache-producer pre-registered, the factory returns
 // a Scorer-only plugin pointed at it.
 func TestPluginFactory_DefersToExistingProducer(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
@@ -99,7 +99,7 @@ func TestPluginFactory_DefersToExistingProducer(t *testing.T) {
 // Two precise-prefix-cache-producer instances leave the legacy plugin unable
 // to choose; the factory errors instead of picking one non-deterministically.
 func TestPluginFactory_RejectsMultipleExistingProducers(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
@@ -136,7 +136,7 @@ func (s *stubPromptTokenizer) Tokenize(rr *tokenizerTypes.RenderChatRequest, pro
 // producer's TokenizedPrompt dependency — the wrapper supplies tokens
 // itself and no upstream token-producer is required.
 func TestLegacyProducer_ConsumesDropsTokenizedPromptWhenPoolSet(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
@@ -157,7 +157,7 @@ func TestLegacyProducer_ConsumesDropsTokenizedPromptWhenPoolSet(t *testing.T) {
 // is set, Produce must route the prompt through the pool and stash the
 // resulting tokens on request.Body.TokenizedPrompt.
 func TestLegacyProducer_TokenizesCompletionPromptViaPool(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
@@ -196,7 +196,7 @@ func TestLegacyProducer_TokenizesCompletionPromptViaPool(t *testing.T) {
 // regressions in the pool → tokens → block-key → attribute pipeline that
 // the deleted UDS integration tests used to cover.
 func TestLegacyProducer_TokensFlowToEndpointAttribute(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 
@@ -240,7 +240,7 @@ func TestLegacyProducer_TokensFlowToEndpointAttribute(t *testing.T) {
 // Pre-existing TokenizedPrompt must skip the pool entirely, so the new-path
 // token-producer pipeline isn't shadowed by the legacy pool.
 func TestLegacyProducer_KeepsExistingTokenizedPrompt(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := fwkplugin.NewEppHandle(ctx, nil,
 		fwkplugin.WithMetricsRecorder(prometheus.NewRegistry()))
 

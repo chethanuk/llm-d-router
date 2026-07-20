@@ -17,7 +17,7 @@ import (
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/nohitlru"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/prefix"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 var _ plugin.Handle = &fakeHandle{}
@@ -106,13 +106,13 @@ func TestNoHitLRUFactoryDependencyValidation(t *testing.T) {
 	}{
 		{
 			name:        "missing prefix cache plugin - should work as optimization",
-			handle:      newFakeHandle(utils.NewTestContext(t)),
+			handle:      newFakeHandle(fwkcontext.NewTestContext(t)),
 			expectError: false,
 		},
 		{
 			name: "prefix plugin present - should work",
 			handle: func() *fakeHandle {
-				h := newFakeHandle(utils.NewTestContext(t))
+				h := newFakeHandle(fwkcontext.NewTestContext(t))
 				h.AddPlugin(prefix.PrefixCacheScorerPluginType, &stubPlugin{name: plugin.TypedName{Type: prefix.PrefixCacheScorerPluginType, Name: prefix.PrefixCacheScorerPluginType}})
 				return h
 			}(),
@@ -163,7 +163,7 @@ func TestNoHitLRUScorer(t *testing.T) {
 	}{
 		{
 			name:   "cold request - all endpoints never used",
-			scorer: nohitlru.NewNoHitLRU(utils.NewTestContext(t), nohitlru.NoHitLRUType, nil),
+			scorer: nohitlru.NewNoHitLRU(fwkcontext.NewTestContext(t), nohitlru.NoHitLRUType, nil),
 			req: &scheduling.InferenceRequest{
 				TargetModel: "test-model",
 			},
@@ -181,7 +181,7 @@ func TestNoHitLRUScorer(t *testing.T) {
 		},
 		{
 			name:   "cache hit - neutral scores",
-			scorer: nohitlru.NewNoHitLRU(utils.NewTestContext(t), nohitlru.NoHitLRUType, nil),
+			scorer: nohitlru.NewNoHitLRU(fwkcontext.NewTestContext(t), nohitlru.NoHitLRUType, nil),
 			req: &scheduling.InferenceRequest{
 				TargetModel: "test-model",
 			},
@@ -200,7 +200,7 @@ func TestNoHitLRUScorer(t *testing.T) {
 		},
 		{
 			name:   "single endpoint - max score",
-			scorer: nohitlru.NewNoHitLRU(utils.NewTestContext(t), nohitlru.NoHitLRUType, nil),
+			scorer: nohitlru.NewNoHitLRU(fwkcontext.NewTestContext(t), nohitlru.NoHitLRUType, nil),
 			req: &scheduling.InferenceRequest{
 				TargetModel: "test-model",
 			},
@@ -218,7 +218,7 @@ func TestNoHitLRUScorer(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			eps := test.input()
 			want := test.wantScores(eps)
-			got := test.scorer.Score(utils.NewTestContext(t), test.req, eps)
+			got := test.scorer.Score(fwkcontext.NewTestContext(t), test.req, eps)
 			if diff := cmp.Diff(want, got); diff != "" {
 				t.Errorf("%s: Unexpected output (-want +got): %v", test.description, diff)
 			}
@@ -227,7 +227,7 @@ func TestNoHitLRUScorer(t *testing.T) {
 }
 
 func TestNoHitLRUBasicFunctionality(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	endpointA := newCold("pod-a")
@@ -253,7 +253,7 @@ func TestNoHitLRUBasicFunctionality(t *testing.T) {
 }
 
 func TestNoPrefixCacheStateFound(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	// No attributes on the endpoint → treated as cold request.
@@ -268,7 +268,7 @@ func TestNoPrefixCacheStateFound(t *testing.T) {
 }
 
 func TestNoHitLRUPreferLeastRecentlyUsedAfterColdRequests(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	// Shared cold endpoints — no PrefixCacheMatchInfo attributes.
@@ -378,7 +378,7 @@ func TestNoHitLRUPreferLeastRecentlyUsedAfterColdRequests(t *testing.T) {
 }
 
 func TestNoHitLRUEdgeCases(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	t.Run("empty endpoints list", func(t *testing.T) {
@@ -536,7 +536,7 @@ func dumpLRU(t *testing.T, scorer *nohitlru.NoHitLRU) dumpedLRUState {
 }
 
 func TestDumpState(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	seedCold(ctx, scorer, newColdNS("pod-a"), "cold-a")
@@ -560,7 +560,7 @@ func TestDumpState(t *testing.T) {
 }
 
 func TestDumpStateCaps(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	const total = 105 // greater than the 100-endpoint dump cap
@@ -591,7 +591,7 @@ func TestDumpStateCaps(t *testing.T) {
 }
 
 func TestDumpStateEmpty(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	// Fresh scorer: empty LRU.
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
@@ -606,7 +606,7 @@ func TestDumpStateEmpty(t *testing.T) {
 }
 
 func TestDumpStateConcurrentWithPreRequest(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := nohitlru.NewNoHitLRU(ctx, nohitlru.NoHitLRUType, nil)
 
 	var wg sync.WaitGroup

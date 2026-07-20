@@ -8,7 +8,7 @@ import (
 	k8stypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestRoleFilterDecodeRole(t *testing.T) {
@@ -33,7 +33,7 @@ func TestRoleFilterDecodeRole(t *testing.T) {
 			map[string]string{}),
 	}
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	rf := NewDecodeRole()
 
 	filtered := rf.Filter(ctx, nil, endpoints)
@@ -69,7 +69,7 @@ func TestRoleFilterPrefillRole(t *testing.T) {
 			map[string]string{"app": "vllm"}),
 	}
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	rf := NewPrefillRole()
 
 	filtered := rf.Filter(ctx, nil, endpoints)
@@ -100,7 +100,7 @@ func TestRoleFilterEncodeRole(t *testing.T) {
 			map[string]string{"app": "vllm"}),
 	}
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	rf := NewEncodeRole()
 
 	filtered := rf.Filter(ctx, nil, endpoints)
@@ -179,7 +179,7 @@ func TestRoleFilterWithName(t *testing.T) {
 }
 
 func TestRoleFilterEmptyEndpoints(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	rf := NewDecodeRole()
 
 	result := rf.Filter(ctx, nil, []scheduling.Endpoint{})
