@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Kubernetes Authors.
+Copyright 2026 The llm-d Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package testing
+// Package gaie provides builders for GAIE and apix inference CRDs used in tests.
+// It imports GAIE/apix API types and pkg/common/routing only, never pkg/epp.
+package gaie
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

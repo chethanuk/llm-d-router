@@ -75,8 +75,6 @@ linters:
           alias: sourcemetrics
         - pkg: github.com/llm-d/llm-d-router/pkg/epp/util/pool
           alias: poolutil
-        - pkg: github.com/llm-d/llm-d-router/pkg/epp/util/testing
-          alias: testutil
         - pkg: github.com/llm-d/llm-d-router/pkg/common/error
           alias: errcommon
         - pkg: github.com/llm-d/llm-d-router/test/utils/igw
