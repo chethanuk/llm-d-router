@@ -32,6 +32,7 @@ import (
 	sessionutil "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/util/sessionaffinity"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
+	eppharness "github.com/llm-d/llm-d-router/test/framework/epp/harness"
 	fwkk8s "github.com/llm-d/llm-d-router/test/framework/k8s"
 )
 
@@ -62,12 +63,12 @@ dataLayer:
 `
 
 	ctx := t.Context()
-	h := NewTestHarness(ctx, t, WithStandardMode(), WithConfigText(configText)).WithBaseResources()
+	h := eppharness.NewTestHarness(ctx, t, eppharness.WithStandardMode(), eppharness.WithConfigText(configText)).WithBaseResources()
 
 	// Two ready pods so the filter has a real choice to pin to.
-	pods := []PodState{
-		P(0, 0, 0.1, modelMyModelTarget),
-		P(1, 0, 0.1, modelMyModelTarget),
+	pods := []eppharness.PodState{
+		eppharness.P(0, 0, 0.1, modelMyModelTarget),
+		eppharness.P(1, 0, 0.1, modelMyModelTarget),
 	}
 	h.WithPods(pods).WaitForSync(len(pods), modelMyModel)
 	h.WaitForReadyPodsMetric(len(pods))
@@ -111,11 +112,11 @@ dataLayer:
 `
 
 	ctx := t.Context()
-	h := NewTestHarness(ctx, t, WithStandardMode(), WithConfigText(configText)).WithBaseResources()
+	h := eppharness.NewTestHarness(ctx, t, eppharness.WithStandardMode(), eppharness.WithConfigText(configText)).WithBaseResources()
 
-	pods := []PodState{
-		P(0, 0, 0.1, modelMyModelTarget),
-		P(1, 0, 0.1, modelMyModelTarget),
+	pods := []eppharness.PodState{
+		eppharness.P(0, 0, 0.1, modelMyModelTarget),
+		eppharness.P(1, 0, 0.1, modelMyModelTarget),
 	}
 	h.WithPods(pods).WaitForSync(len(pods), modelMyModel)
 	h.WaitForReadyPodsMetric(len(pods))
@@ -132,7 +133,7 @@ dataLayer:
 // EPP and returns the routed destination endpoint and the session token set on
 // the response headers. When sessionToken is non-empty it is sent as the
 // session header on the request.
-func sendSessionRequest(t *testing.T, h *TestHarness, sessionToken string) (endpoint, token string) {
+func sendSessionRequest(t *testing.T, h *eppharness.TestHarness, sessionToken string) (endpoint, token string) {
 	t.Helper()
 
 	reqHeaders := map[string]string{
@@ -213,10 +214,10 @@ schedulingProfiles:
 
 // setupPDHarness creates a test harness with prefill and decode pods for PD
 // session-affinity tests.
-func setupPDHarness(t *testing.T, configText string) *TestHarness {
+func setupPDHarness(t *testing.T, configText string) *eppharness.TestHarness {
 	t.Helper()
 	ctx := t.Context()
-	h := NewTestHarness(ctx, t, WithStandardMode(), WithConfigText(configText)).WithBaseResources()
+	h := eppharness.NewTestHarness(ctx, t, eppharness.WithStandardMode(), eppharness.WithConfigText(configText)).WithBaseResources()
 
 	metricsMap := make(map[types.NamespacedName]*fwkdl.Metrics)
 	type podDef struct {
@@ -239,7 +240,7 @@ func setupPDHarness(t *testing.T, configText string) *TestHarness {
 			Namespace(h.Namespace).
 			ReadyCondition().
 			Labels(map[string]string{
-				"app":             TestPoolName,
+				"app":             eppharness.TestPoolName,
 				bylabel.RoleLabel: p.role,
 			}).
 			IP(fmt.Sprintf("192.168.1.%d", p.index+1)).
@@ -247,9 +248,9 @@ func setupPDHarness(t *testing.T, configText string) *TestHarness {
 			ObjRef()
 
 		intendedStatus := pod.Status
-		require.NoError(t, K8sClient().Create(ctx, pod))
+		require.NoError(t, eppharness.K8sClient().Create(ctx, pod))
 		pod.Status = intendedStatus
-		require.NoError(t, K8sClient().Status().Update(ctx, pod))
+		require.NoError(t, eppharness.K8sClient().Status().Update(ctx, pod))
 	}
 	h.SetPodMetrics(metricsMap)
 	h.WaitForSync(len(pods), modelMyModel)
@@ -307,7 +308,7 @@ func TestSessionAffinityFilter_DecodeOnly(t *testing.T) {
 // sendSessionRequestGetHeader drives a request through the EPP and returns the
 // value of the named response header. It extends sendSessionRequest to support
 // the prefill session token header.
-func sendSessionRequestGetHeader(t *testing.T, h *TestHarness, decodeToken, prefillToken, headerKey string) string {
+func sendSessionRequestGetHeader(t *testing.T, h *eppharness.TestHarness, decodeToken, prefillToken, headerKey string) string {
 	t.Helper()
 
 	reqHeaders := map[string]string{
@@ -430,10 +431,10 @@ func runSessionIDHeaderStrategyChecks(t *testing.T, configText string) {
 	const claudeHeader = "x-claude-code-session-id"
 
 	ctx := t.Context()
-	h := NewTestHarness(ctx, t, WithStandardMode(), WithConfigText(configText)).WithBaseResources()
-	pods := []PodState{
-		P(0, 0, 0.1, modelMyModelTarget),
-		P(1, 0, 0.1, modelMyModelTarget),
+	h := eppharness.NewTestHarness(ctx, t, eppharness.WithStandardMode(), eppharness.WithConfigText(configText)).WithBaseResources()
+	pods := []eppharness.PodState{
+		eppharness.P(0, 0, 0.1, modelMyModelTarget),
+		eppharness.P(1, 0, 0.1, modelMyModelTarget),
 	}
 	h.WithPods(pods).WaitForSync(len(pods), modelMyModel)
 	h.WaitForReadyPodsMetric(len(pods))
@@ -480,7 +481,7 @@ var routedRequestSeq int64
 // extra request headers and returns the routed destination endpoint. Unlike
 // sendSessionRequest it reads no response token: session_id writes nothing
 // back, so affinity is asserted purely by the endpoint the request is routed to.
-func sendRoutedRequest(t *testing.T, h *TestHarness, extraHeaders map[string]string) string {
+func sendRoutedRequest(t *testing.T, h *eppharness.TestHarness, extraHeaders map[string]string) string {
 	t.Helper()
 
 	// Unique per call: the Choose->PreRequest boundPodPresence handoff is keyed by
