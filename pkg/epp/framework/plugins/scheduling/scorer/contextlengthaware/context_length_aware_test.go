@@ -13,7 +13,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 // Helper functions
@@ -83,7 +83,7 @@ func TestFactory(t *testing.T) {
 }
 
 func TestContextLengthAwareFilter(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	endpoints := []scheduling.Endpoint{
 		createEndpoint(k8stypes.NamespacedName{Namespace: "default", Name: "short-range"},
@@ -120,7 +120,7 @@ func TestContextLengthAwareFilter(t *testing.T) {
 }
 
 func TestContextLengthAwareScore(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	endpoints := []scheduling.Endpoint{
 		createEndpoint(k8stypes.NamespacedName{Namespace: "default", Name: "tight-range"},
@@ -245,7 +245,7 @@ func TestCalculateRangeScoreFallback(t *testing.T) {
 // as populated by the tokenizer DataProducer plugin.
 
 func TestContextLengthAwareWithTokenizedPromptOnRequest(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tokenCount := 42
 
@@ -283,7 +283,7 @@ func TestContextLengthAwareWithTokenizedPromptOnRequest(t *testing.T) {
 }
 
 func TestContextLengthAwareNilTokenizedPromptIsZero(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	// Without TokenizedPrompt the context length is 0 (unknown); no protocol structs are read.
 	endpoints := []scheduling.Endpoint{

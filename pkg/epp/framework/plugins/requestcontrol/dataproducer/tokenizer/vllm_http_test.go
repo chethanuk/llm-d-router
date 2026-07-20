@@ -30,7 +30,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 const testHTTPModel = "test-model"
@@ -272,7 +272,7 @@ func TestPluginFactory_RejectsBothBackends(t *testing.T) {
 		"udsTokenizerConfig": {"socketFile": "/tmp/foo.sock"},
 		"vllm": {"url": "http://localhost:8000"}
 	}`
-	handle := plugin.NewEppHandle(utils.NewTestContext(t), nil)
+	handle := plugin.NewEppHandle(fwkcontext.NewTestContext(t), nil)
 	p, err := PluginFactory("test", plugin.StrictDecoder(json.RawMessage(params)), handle)
 	require.Error(t, err)
 	assert.Nil(t, p)
@@ -284,7 +284,7 @@ func TestPluginFactory_HTTPBackend_BadTimeout(t *testing.T) {
 		"modelName": "m",
 		"vllm": {"timeout": "nope"}
 	}`
-	handle := plugin.NewEppHandle(utils.NewTestContext(t), nil)
+	handle := plugin.NewEppHandle(fwkcontext.NewTestContext(t), nil)
 	p, err := PluginFactory("test", plugin.StrictDecoder(json.RawMessage(params)), handle)
 	require.Error(t, err)
 	assert.Nil(t, p)

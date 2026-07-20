@@ -12,7 +12,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestFactory(t *testing.T) {
@@ -246,7 +246,7 @@ func TestByLabelFiltering(t *testing.T) {
 			blf, ok := plugin.(*ByLabel)
 			require.True(t, ok, "plugin should be of type *ByLabel")
 
-			ctx := utils.NewTestContext(t)
+			ctx := fwkcontext.NewTestContext(t)
 
 			filteredEndpoints := blf.Filter(ctx, nil, endpoints)
 

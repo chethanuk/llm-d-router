@@ -15,7 +15,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 const DefaultTestPodPort = "8000"
@@ -122,7 +122,7 @@ func TestProfileHandlerFactory(t *testing.T) {
 			if tt.jsonParams != "" {
 				rawParams = json.RawMessage(tt.jsonParams)
 			}
-			handle := plugin.NewEppHandle(utils.NewTestContext(t), nil)
+			handle := plugin.NewEppHandle(fwkcontext.NewTestContext(t), nil)
 			plugin, err := ProfileHandlerFactory(tt.pluginName, plugin.StrictDecoder(rawParams), handle)
 
 			if tt.expectErr {
@@ -162,7 +162,7 @@ func TestProfileHandlerFactoryInvalidJSON(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 
 			rawParams := json.RawMessage(tt.jsonParams)
-			handle := plugin.NewEppHandle(utils.NewTestContext(t), nil)
+			handle := plugin.NewEppHandle(fwkcontext.NewTestContext(t), nil)
 			plugin, err := ProfileHandlerFactory("test", plugin.StrictDecoder(rawParams), handle)
 
 			assert.Error(t, err)

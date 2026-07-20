@@ -12,6 +12,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/dataproducer/inflightload"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 	testutils "github.com/llm-d/llm-d-router/test/utils"
 )
 
@@ -101,7 +102,7 @@ func TestActiveRequestScorer_Score(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := testutils.NewTestContext(t)
+			ctx := fwkcontext.NewTestContext(t)
 			scorer := NewActiveRequest(ctx, nil)
 			endpoints := test.endpoints()
 
@@ -117,7 +118,7 @@ func TestActiveRequestScorer_Score(t *testing.T) {
 }
 
 func TestActiveRequestScorer_UsesInFlightLoadProducerLifecycle(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	producerPlugin, err := inflightload.InFlightLoadProducerFactory(inflightload.InFlightLoadProducerType, nil, testutils.NewTestHandle(ctx))
 	require.NoError(t, err)
@@ -163,7 +164,7 @@ func TestActiveRequestScorer_UsesInFlightLoadProducerLifecycle(t *testing.T) {
 }
 
 func TestNewActiveRequestScorer_DeprecatedRequestTimeoutIgnored(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	params := &Parameters{RequestTimeout: "invalid"}
 	scorer := NewActiveRequest(ctx, params)
@@ -172,7 +173,7 @@ func TestNewActiveRequestScorer_DeprecatedRequestTimeoutIgnored(t *testing.T) {
 }
 
 func TestActiveRequestScorer_Consumes(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	scorer := NewActiveRequest(ctx, nil)
 	consumes := scorer.Consumes()
@@ -182,7 +183,7 @@ func TestActiveRequestScorer_Consumes(t *testing.T) {
 }
 
 func TestActiveRequestScorer_TypedName(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	scorer := NewActiveRequest(ctx, nil)
 
@@ -190,7 +191,7 @@ func TestActiveRequestScorer_TypedName(t *testing.T) {
 }
 
 func TestActiveRequestScorer_WithName(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	scorer := NewActiveRequest(ctx, nil)
 	testName := "test-scorer"
@@ -201,7 +202,7 @@ func TestActiveRequestScorer_WithName(t *testing.T) {
 }
 
 func TestActiveRequest_IdleThresholdAndMaxBusyScore(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	t.Run("binary mode: idleThreshold=0, maxBusyScore=0", func(t *testing.T) {
 		params := &Parameters{
@@ -247,7 +248,7 @@ func TestActiveRequest_IdleThresholdAndMaxBusyScore(t *testing.T) {
 // regression where an unset MaxBusyScore (Go zero-value 0.0) silently put the
 // scorer into binary mode, returning 0.0 for every non-idle pod.
 func TestActiveRequest_DefaultParamsProduceContinuousScores(t *testing.T) {
-	ctx := testutils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	scorer := NewActiveRequest(ctx, &Parameters{})
 
 	podLight := newTestEndpointWithLoad("pod-light", 3)

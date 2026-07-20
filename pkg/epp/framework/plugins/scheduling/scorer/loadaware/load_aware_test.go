@@ -10,7 +10,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	loadaware "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/loadaware"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestLoadBasedScorer(t *testing.T) {
@@ -45,7 +45,7 @@ func TestLoadBasedScorer(t *testing.T) {
 	}{
 		{
 			name:   "load based scorer",
-			scorer: loadaware.NewLoadAware(utils.NewTestContext(t), 10),
+			scorer: loadaware.NewLoadAware(fwkcontext.NewTestContext(t), 10),
 			req: &scheduling.InferenceRequest{
 				TargetModel: "critical",
 			},
