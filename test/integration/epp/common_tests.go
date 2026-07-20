@@ -52,7 +52,7 @@ func buildEnvoyHeaders(headers map[string]string) []*envoyCorev3.HeaderValue {
 // This simulates the "Subset Load Balancing" flow where EPP picks a specific pod IP.
 func ReqSubset(prompt, model, target string, subsets ...string) []*extProcPb.ProcessingRequest {
 	// Uses the shared low-level generator which handles the metadata construction
-	return fwkepp.GenerateStreamedRequestSet(logger, prompt, model, target, subsets)
+	return fwkepp.GenerateStreamedRequestSet(Logger(), prompt, model, target, subsets)
 }
 
 // ReqResponseOnly creates a sequence simulating only the response phase from Envoy.
@@ -282,7 +282,7 @@ type testCase struct {
 	wantMetrics   map[string]string
 	waitForModel  string
 	// requiresCRDs indicates that this test case relies on specific Gateway API CRD features (like
-	// InferenceModelRewrite) which are not available in Standalone runMode without CRD.
+	// InferenceModelRewrite) which are not available in Standalone mode without CRD.
 	requiresCRDs bool
 	// wantSpans lists the span names expected to be recorded (hermetic tests only).
 	wantSpans []string
@@ -294,7 +294,7 @@ func commonTestCases(prio func(int) int) []testCase {
 	return []testCase{
 		{
 			name:     "select lower queue and kv cache",
-			requests: fwkepp.ReqLLM(logger, "test1", modelMyModel, modelMyModelTarget),
+			requests: fwkepp.ReqLLM(Logger(), "test1", modelMyModel, modelMyModelTarget),
 			pods: []PodState{
 				P(0, 3, 0.2),
 				P(1, 0, 0.1), // Winner (Low Queue, Low KV)
@@ -302,14 +302,14 @@ func commonTestCases(prio func(int) int) []testCase {
 			},
 			wantResponses: ExpectRouteTo("192.168.1.2:8000", modelMyModelTarget, "test1"),
 			wantMetrics: map[string]string{
-				"inference_objective_request_total": cleanMetric(metricReqTotal(modelMyModel, modelMyModelTarget, prio(2))),
-				"inference_pool_ready_pods":         cleanMetric(metricReadyPods(3)),
+				"inference_objective_request_total": CleanMetric(MetricReqTotal(modelMyModel, modelMyModelTarget, prio(2))),
+				"inference_pool_ready_pods":         CleanMetric(MetricReadyPods(3)),
 			},
 			wantSpans: []string{"gateway.request", "gateway.request_orchestration"},
 		},
 		{
 			name:     "select active lora, low queue",
-			requests: fwkepp.ReqLLM(logger, "test2", modelSQLLora, modelSQLLoraTarget),
+			requests: fwkepp.ReqLLM(Logger(), "test2", modelSQLLora, modelSQLLoraTarget),
 			pods: []PodState{
 				P(0, 0, 0.2, "foo", "bar"),
 				P(1, 0, 0.1, "foo", modelSQLLoraTarget), // Winner (Has LoRA)
@@ -317,7 +317,7 @@ func commonTestCases(prio func(int) int) []testCase {
 			},
 			wantResponses: ExpectRouteTo("192.168.1.2:8000", modelSQLLoraTarget, "test2"),
 			wantMetrics: map[string]string{
-				"inference_objective_request_total": cleanMetric(metricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
+				"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
 			},
 		},
 		{
@@ -364,7 +364,8 @@ func labelsToString(labels []label) string {
 	return strings.Join(parts, ",")
 }
 
-func metricReqTotal(model, target string, priority int) string {
+// MetricReqTotal renders the expected inference_objective_request_total exposition text.
+func MetricReqTotal(model, target string, priority int) string {
 	return fmt.Sprintf(`
     # HELP inference_objective_request_total [ALPHA] [Deprecated: Use llm_d_epp_request_total] Counter of inference objective requests broken out for each model and target model.
     # TYPE inference_objective_request_total counter
@@ -372,17 +373,18 @@ func metricReqTotal(model, target string, priority int) string {
     `, labelsToString([]label{{"model_name", model}, {"priority", strconv.Itoa(priority)}, {"target_model_name", target}}))
 }
 
-func metricReadyPods(count int) string {
+// MetricReadyPods renders the expected inference_pool_ready_pods exposition text.
+func MetricReadyPods(count int) string {
 	return fmt.Sprintf(`
     # HELP inference_pool_ready_pods [ALPHA] [Deprecated: Use llm_d_epp_ready_endpoints] The number of ready pods in the inference server pool.
     # TYPE inference_pool_ready_pods gauge
     inference_pool_ready_pods{%s} %d
-    `, labelsToString([]label{{"name", testPoolName}}), count)
+    `, labelsToString([]label{{"name", TestPoolName}}), count)
 }
 
-// cleanMetric removes indentation from multiline metric strings and ensures a trailing newline exists, which is
+// CleanMetric removes indentation from multiline metric strings and ensures a trailing newline exists, which is
 // required by the Prometheus text parser.
-func cleanMetric(s string) string {
+func CleanMetric(s string) string {
 	lines := strings.Split(s, "\n")
 	var cleaned []string
 	for _, l := range lines {
