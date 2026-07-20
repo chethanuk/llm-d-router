@@ -15,7 +15,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package epp
+// Package harness boots a shared envtest environment and per-test EPP servers for
+// integration suites.
+//
+// It sits at the top of the framework layering and may import anything, including
+// pkg/epp/server and cmd/epp/runner; only integration and e2e suites import it.
+package harness
 
 import (
 	"context"
@@ -26,6 +31,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -67,6 +73,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	dlmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/mocks"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/saturationdetector/utilization"
+	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	eppServer "github.com/llm-d/llm-d-router/pkg/epp/server"
 	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
@@ -623,4 +630,61 @@ func (h *TestHarness) ExpectMetrics(expected map[string]string) {
 			h.t.Errorf("Metric mismatch for %s: %v", name, err)
 		}
 	}
+}
+
+// --- Data Structures & Metrics Helpers ---
+
+type PodState struct {
+	index        int
+	queueSize    int
+	kvCacheUsage float64
+	activeModels []string
+}
+
+// P constructs a Pod State: Index, Queue, KV%, Models...
+// Usage: P(0, 5, 0.2, "model-a")
+func P(idx int, q int, kv float64, models ...string) PodState {
+	return PodState{index: idx, queueSize: q, kvCacheUsage: kv, activeModels: models}
+}
+
+type label struct{ name, value string }
+
+func labelsToString(labels []label) string {
+	parts := make([]string, len(labels))
+	for i, l := range labels {
+		parts[i] = fmt.Sprintf("%s=%q", l.name, l.value)
+	}
+	return strings.Join(parts, ",")
+}
+
+// MetricReqTotal renders the expected llm_d_epp_request_total exposition text.
+func MetricReqTotal(model, target string, priority int) string {
+	return fmt.Sprintf(`
+    # HELP llm_d_epp_request_total [ALPHA] Total number of processed requests.
+    # TYPE llm_d_epp_request_total counter
+    llm_d_epp_request_total{%s} 1
+    `, labelsToString([]label{{"fairness_id", metadata.DefaultFairnessID}, {"model_name", model}, {"priority", strconv.Itoa(priority)}, {"target_model_name", target}}))
+}
+
+// MetricReadyPods renders the expected llm_d_epp_ready_endpoints exposition text.
+func MetricReadyPods(count int) string {
+	return fmt.Sprintf(`
+	# HELP llm_d_epp_ready_endpoints [ALPHA] The number of ready endpoints in the inference server pool.
+	# TYPE llm_d_epp_ready_endpoints gauge
+	llm_d_epp_ready_endpoints{%s} %d
+    `, labelsToString([]label{{"name", TestPoolName}}), count)
+}
+
+// CleanMetric removes indentation from multiline metric strings and ensures a trailing newline exists, which is
+// required by the Prometheus text parser.
+func CleanMetric(s string) string {
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return strings.Join(cleaned, "\n") + "\n"
 }
