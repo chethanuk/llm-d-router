@@ -54,9 +54,9 @@ import (
 	dlmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/mocks"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	eppServer "github.com/llm-d/llm-d-router/pkg/epp/server"
+	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
 	fwkk8s "github.com/llm-d/llm-d-router/test/framework/k8s"
 	fwknet "github.com/llm-d/llm-d-router/test/framework/net"
-	integration "github.com/llm-d/llm-d-router/test/integration"
 )
 
 // Global State (Initialized in TestMain)
@@ -276,7 +276,7 @@ func NewTestHarness(ctx context.Context, t *testing.T, opts ...HarnessOption) *T
 		// Wait until the ext-proc server binds, or the manager reports an early bind
 		// failure. On failure, stop this attempt's manager and wait for its listeners to
 		// release before the next GetFreePort round.
-		if err := integration.WaitExtProcReady(eppOptions.GRPCPort, mgrErr); err != nil {
+		if err := fwkepp.WaitExtProcReady(eppOptions.GRPCPort, mgrErr); err != nil {
 			mgrCancel()
 			<-mgrDone
 			return err
@@ -284,11 +284,11 @@ func NewTestHarness(ctx context.Context, t *testing.T, opts ...HarnessOption) *T
 		return nil
 	}
 	require.NoError(t,
-		integration.RetryOnAddrInUse(portBindMaxAttempts, portBindRetryDelay, attempt, metrics.Reset),
+		fwkepp.RetryOnAddrInUse(portBindMaxAttempts, portBindRetryDelay, attempt, metrics.Reset),
 		"EPP manager failed to bind its ports",
 	)
 
-	extProcClient, conn := integration.ExtProcServerClient(
+	extProcClient, conn := fwkepp.ExtProcServerClient(
 		mgrCtx,
 		t,
 		eppOptions.GRPCPort,
