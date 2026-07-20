@@ -20,10 +20,6 @@ package epp
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -33,20 +29,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/testing/protocmp"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/apimachinery/pkg/util/yaml"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
-	v1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
-
-	"github.com/llm-d/llm-d-router/apix/v1alpha2"
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
-	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
 )
 
@@ -59,79 +44,24 @@ const (
 	inferenceObjectiveWithPriority4 = "inference-objective-with-priority-4"
 )
 
-// repoRootPath is the on-disk path to this repository. Hermetic tests use local
-// llm-d CRDs and fixtures so API group migrations are exercised before CI.
-var repoRootPath string
-
-func TestMain(m *testing.M) {
-	ctrl.SetLogger(logger)
-
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("failed to locate hermetic test source file")
-	}
-	repoRootPath = filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
-
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}",
-		"sigs.k8s.io/gateway-api-inference-extension").Output()
-	if err != nil {
-		panic(fmt.Sprintf("failed to locate gateway-api-inference-extension module: %v", err))
-	}
-	gaieModulePath := strings.TrimSpace(string(out))
-	crdPaths := []string{
-		filepath.Join(gaieModulePath, "config", "crd", "bases"),
-		filepath.Join(repoRootPath, "config", "crd", "bases"),
-	}
-
-	// 1. EnvTest Setup (API Server + Etcd)
-	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     crdPaths,
-		ErrorIfCRDPathMissing: true,
-	}
-	cfg, err := testEnv.Start()
-	if err != nil {
-		panic(fmt.Sprintf("failed to start test environment: %v", err))
-	}
-
-	// 2. Client & Scheme Registration
-	utilruntime.Must(clientgoscheme.AddToScheme(testScheme))
-	utilruntime.Must(v1alpha2.Install(testScheme))
-	utilruntime.Must(v1.Install(testScheme))
-	k8sClient, err = client.New(cfg, client.Options{Scheme: testScheme})
-	if err != nil {
-		panic(err)
-	}
-
-	// 3. Global Metric Registration
-	// Necessary because we cannot parallelize tests using the global registry.
-	metrics.Register()
-
-	// 4. Pre-parse Base Resources
-	// We load the YAML once here to avoid unnecessary I/O in every test case.
-	baseResources = loadBaseResources()
-
-	code := m.Run()
-
-	_ = testEnv.Stop()
-	os.Exit(code)
-}
+func TestMain(m *testing.M) { os.Exit(Run(m)) }
 
 func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 	// executionModes defines the permutations of EPP deployment modes to test.
 	executionModes := []struct {
-		name               string
-		mode               runMode
-		standaloneStrategy standaloneStrategy
+		name     string
+		mode     RunMode
+		strategy StandaloneStrategy
 	}{
-		{name: "Standard", mode: modeStandard},
-		{name: "Standalone-NoCRD", mode: modeStandalone, standaloneStrategy: strategyNoCRD},
-		{name: "Standalone-WithCRD", mode: modeStandalone, standaloneStrategy: strategyWithCRD},
+		{name: "Standard", mode: ModeStandard},
+		{name: "Standalone-NoCRD", mode: ModeStandalone, strategy: StrategyNoCRD},
+		{name: "Standalone-WithCRD", mode: ModeStandalone, strategy: StrategyWithCRD},
 	}
 
 	for _, executionMode := range executionModes {
 		t.Run(executionMode.name, func(t *testing.T) {
 			// Determine if we are running in the standalone mode without CRDs
-			isNoCRD := executionMode.mode == modeStandalone && executionMode.standaloneStrategy == strategyNoCRD
+			isNoCRD := executionMode.mode == ModeStandalone && executionMode.strategy == StrategyNoCRD
 
 			// Helper function to override priority to 0 when in NoCRD mode
 			prio := func(p int) int {
@@ -144,7 +74,7 @@ func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 			hermeticTests := []testCase{
 				{
 					name:     "select lora despite higher kv cache (affinity)",
-					requests: fwkepp.ReqLLM(logger, "test3", modelSQLLora, modelSQLLoraTarget),
+					requests: fwkepp.ReqLLM(Logger(), "test3", modelSQLLora, modelSQLLoraTarget),
 					pods: []PodState{
 						P(0, 10, 0.2, "foo", "bar"),
 						P(1, 10, 0.4, "foo", modelSQLLoraTarget), // Winner (Affinity overrides KV)
@@ -152,7 +82,7 @@ func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 					},
 					wantResponses: ExpectRouteTo("192.168.1.2:8000", modelSQLLoraTarget, "test3"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
 					},
 				},
 				{
@@ -192,13 +122,13 @@ dataLayer:
 					},
 					wantResponses: ExpectPassthroughRouteTo("192.168.1.2:8000", []byte("passthrough-parser")),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal("", "", prio(2))),
-						"inference_pool_ready_pods":         cleanMetric(metricReadyPods(3)),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal("", "", prio(2))),
+						"inference_pool_ready_pods":         CleanMetric(MetricReadyPods(3)),
 					},
 				},
 				{
 					name:     "do not shed requests by default",
-					requests: fwkepp.ReqLLM(logger, "test4", modelSQLLora, modelSQLLoraTarget),
+					requests: fwkepp.ReqLLM(Logger(), "test4", modelSQLLora, modelSQLLoraTarget),
 					pods: []PodState{
 						P(0, 6, 0.2, "foo", "bar", modelSQLLoraTarget), // Winner (Lowest saturated)
 						P(1, 0, 0.85, "foo"),
@@ -206,7 +136,7 @@ dataLayer:
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelSQLLoraTarget, "test4"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSQLLora, modelSQLLoraTarget, prio(2))),
 					},
 				},
 
@@ -243,7 +173,7 @@ dataLayer:
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelSheddableTarget, "test6"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal(modelSheddable, modelSheddableTarget, prio(0))),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelSheddable, modelSheddableTarget, prio(0))),
 					},
 				},
 				{
@@ -315,18 +245,18 @@ dataLayer:
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelDirect, "test6"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal(modelDirect, modelDirect, prio(2))),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelDirect, modelDirect, prio(2))),
 					},
 				},
 				{
 					name:     "rewrite request model",
-					requests: fwkepp.ReqLLM(logger, "test-rewrite", modelToBeWritten, modelToBeWritten),
+					requests: fwkepp.ReqLLM(Logger(), "test-rewrite", modelToBeWritten, modelToBeWritten),
 					pods: []PodState{
 						P(0, 0, 0.1, "foo", modelAfterRewrite),
 					},
 					wantResponses: ExpectRouteTo("192.168.1.1:8000", modelAfterRewrite, "test-rewrite"),
 					wantMetrics: map[string]string{
-						"inference_objective_request_total": cleanMetric(metricReqTotal(modelToBeWritten, modelAfterRewrite, prio(0))),
+						"inference_objective_request_total": CleanMetric(MetricReqTotal(modelToBeWritten, modelAfterRewrite, prio(0))),
 					},
 					requiresCRDs: true,
 				},
@@ -393,7 +323,7 @@ dataLayer:
 					),
 					// Labels are empty because we skipped the Request phase.
 					wantMetrics: map[string]string{
-						"inference_objective_input_tokens": cleanMetric(`
+						"inference_objective_input_tokens": CleanMetric(`
               # HELP inference_objective_input_tokens [ALPHA] [Deprecated: Use llm_d_epp_request_input_tokens] Inference objective input token count distribution for requests in each model.
               # TYPE inference_objective_input_tokens histogram
               inference_objective_input_tokens_bucket{model_name="",target_model_name="",le="1"} 0
@@ -439,8 +369,8 @@ dataLayer:
 						harnessOpts = append(harnessOpts, WithTracing())
 					}
 
-					if executionMode.mode == modeStandalone {
-						harnessOpts = append(harnessOpts, WithStandaloneMode(executionMode.standaloneStrategy))
+					if executionMode.mode == ModeStandalone {
+						harnessOpts = append(harnessOpts, WithStandaloneMode(executionMode.strategy))
 					} else {
 						harnessOpts = append(harnessOpts, WithStandardMode())
 					}
@@ -451,11 +381,11 @@ dataLayer:
 
 					h = NewTestHarness(ctx, t, harnessOpts...)
 
-					if executionMode.mode == modeStandard || executionMode.standaloneStrategy == strategyWithCRD {
+					if executionMode.mode == ModeStandard || executionMode.strategy == StrategyWithCRD {
 						h = h.WithBaseResources()
 					}
 
-					// In standalone runMode without crd, we cannot wait for an Objective CRD to sync as it doesn't exist.
+					// In standalone mode without crd, we cannot wait for an Objective CRD to sync as it doesn't exist.
 					// We only wait for Pod discovery.
 					modelToSync := tc.waitForModel
 					if modelToSync == "" {
@@ -505,27 +435,4 @@ dataLayer:
 			}
 		})
 	}
-}
-
-// loadBaseResources parses the YAML manifest once at startup.
-func loadBaseResources() []*unstructured.Unstructured {
-	path := filepath.Join(repoRootPath, "test", "testdata", "inferencepool-with-model-hermetic.yaml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		panic(fmt.Sprintf("failed to read manifest %s: %v", path, err))
-	}
-
-	var objs []*unstructured.Unstructured
-	decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(string(data)), 4096)
-	for {
-		u := &unstructured.Unstructured{}
-		if err := decoder.Decode(u); err != nil {
-			if err.Error() == "EOF" {
-				break
-			}
-			panic(fmt.Sprintf("failed to decode YAML: %v", err))
-		}
-		objs = append(objs, u)
-	}
-	return objs
 }
