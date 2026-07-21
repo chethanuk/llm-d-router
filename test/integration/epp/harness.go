@@ -343,17 +343,13 @@ func defaultEppServerOptions(t *testing.T, namespace, configText string) *eppSer
 	eppOptions.PoolNamespace = namespace
 	eppOptions.ConfigText = configText
 
-	metricsPort, err := testutils.GetFreePort()
-	require.NoError(t, err)
-	eppOptions.MetricsPort = metricsPort
-
 	grpcPort, err := testutils.GetFreePort()
 	require.NoError(t, err)
 	eppOptions.GRPCPort = grpcPort
 
-	healthPort, err := testutils.GetFreePort()
-	require.NoError(t, err)
-	eppOptions.GRPCHealthPort = healthPort
+	// No test dials the health server, so let the kernel assign the port: a
+	// port 0 bind cannot lose a race to another listener.
+	eppOptions.GRPCHealthPort = 0
 	eppOptions.EndpointTargetPorts = []int{8000}
 	eppOptions.SecureServing = false
 	return eppOptions

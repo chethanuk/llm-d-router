@@ -51,6 +51,9 @@ func NewTestRunnerSetup(ctx context.Context, cfg *rest.Config, opts *runserver.O
 	managerOverrides := []func(*ctrl.Options){
 		func(o *ctrl.Options) {
 			o.Controller.SkipNameValidation = &skipNameValidation
+			// The kernel assigns the port, so the bind cannot lose a race to
+			// another listener the way a port number chosen in advance can.
+			o.Metrics.BindAddress = "127.0.0.1:0"
 		},
 	}
 
