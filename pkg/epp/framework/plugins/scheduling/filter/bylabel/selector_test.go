@@ -14,7 +14,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/filter/bylabel"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 func TestLabelSelectorFilterFactoryWithJSON(t *testing.T) {
@@ -299,7 +299,7 @@ func TestLabelSelectorFilterFiltering(t *testing.T) {
 			blf, ok := plugin.(*bylabel.Selector)
 			require.True(t, ok, "plugin should be of type *Selector")
 
-			ctx := utils.NewTestContext(t)
+			ctx := fwkcontext.NewTestContext(t)
 
 			filteredEndpoints := blf.Filter(ctx, nil, endpoints)
 
@@ -324,7 +324,7 @@ func TestLabelSelectorFilterEdgeCases(t *testing.T) {
 	blf, ok := plugin.(*bylabel.Selector)
 	require.True(t, ok)
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	t.Run("empty endpoints slice", func(t *testing.T) {
 		result := blf.Filter(ctx, nil, []scheduling.Endpoint{})
@@ -424,7 +424,7 @@ func TestDeprecatedSelectorFactoryBackwardCompat(t *testing.T) {
 	require.True(t, ok, "deprecated factory should still produce *Selector")
 	assert.Equal(t, bylabel.ByLabelSelectorType, blf.TypedName().Type)
 
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	endpoints := []scheduling.Endpoint{
 		createEndpoint(k8stypes.NamespacedName{Name: "nginx-1"}, "10.0.0.1", map[string]string{"app": "nginx"}),

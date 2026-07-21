@@ -28,7 +28,7 @@ import (
 
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 // addCall captures one fakeKVBlockIndex.Add invocation.
@@ -63,7 +63,7 @@ func primaryOnly(name string, endpoint scheduling.Endpoint) *scheduling.Scheduli
 // speculativeEnabled=true with populated block keys: index.Add called once
 // with the primary pod identifier, and a speculative cache entry is created.
 func TestPreRequest_SeedsSpeculativeForPrimary(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	var calls []addCall
 	idx := &fakeKVBlockIndex{
@@ -96,7 +96,7 @@ func TestPreRequest_SeedsSpeculativeForPrimary(t *testing.T) {
 // speculativeEnabled=true with empty blockKeys: PreRequest must not call
 // index.Add and must not create a cache entry.
 func TestPreRequest_EmptyBlockKeys_NoAdd(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	idx := &fakeKVBlockIndex{
 		addFn: func(_ context.Context, _ []kvblock.BlockHash, _ []kvblock.BlockHash, _ []kvblock.PodEntry) error {
@@ -117,7 +117,7 @@ func TestPreRequest_EmptyBlockKeys_NoAdd(t *testing.T) {
 // P/D prefill profile: index.Add called twice (primary + prefill), and the
 // cache entry tracks both pod identifiers.
 func TestPreRequest_PrefillProfile_SeedsBoth(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	var calls []addCall
 	idx := &fakeKVBlockIndex{
@@ -155,7 +155,7 @@ func TestPreRequest_PrefillProfile_SeedsBoth(t *testing.T) {
 // speculativeEnabled=false: early return — no index writes, no cache entry,
 // and PluginState is left untouched.
 func TestPreRequest_SpeculativeDisabled_NoOp(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	idx := &fakeKVBlockIndex{
 		addFn: func(_ context.Context, _ []kvblock.BlockHash, _ []kvblock.BlockHash, _ []kvblock.PodEntry) error {

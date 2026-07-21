@@ -30,7 +30,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 const testBlockSize = 16
@@ -89,7 +89,7 @@ func TestPluginFactory_RejectsZeroDelta(t *testing.T) {
 
 // Produce stashes the endpoint holding the most cached prompt tokens.
 func TestProduce_StashesBestMatchPeer(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-stash"}
@@ -107,7 +107,7 @@ func TestProduce_StashesBestMatchPeer(t *testing.T) {
 
 // No candidate holds any cached block: nothing to pull, no attribute.
 func TestProduce_NoCachedBlocks_NoStash(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-nocache"}
@@ -123,7 +123,7 @@ func TestProduce_NoCachedBlocks_NoStash(t *testing.T) {
 
 // Endpoints without PrefixCacheMatchInfo are treated as holding 0 blocks.
 func TestProduce_MissingMatchInfo_TreatedAsZero(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	bare := scheduling.NewEndpoint(&fwkdl.EndpointMetadata{
@@ -142,7 +142,7 @@ func TestProduce_MissingMatchInfo_TreatedAsZero(t *testing.T) {
 
 // Best peer exceeds the decode pod's cached tokens by >= delta: header set.
 func TestPreRequest_SetsKVCacheSourceHeader(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-hdr", Headers: map[string]string{}}
@@ -155,7 +155,7 @@ func TestPreRequest_SetsKVCacheSourceHeader(t *testing.T) {
 
 // Delta below threshold: header not set.
 func TestPreRequest_DeltaBelowThreshold_NoHeader(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 17})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-low", Headers: map[string]string{}}
@@ -168,7 +168,7 @@ func TestPreRequest_DeltaBelowThreshold_NoHeader(t *testing.T) {
 
 // The chosen decode pod is itself the best match: header not set.
 func TestPreRequest_BestIsChosen_NoHeader(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-self", Headers: map[string]string{}}
@@ -182,7 +182,7 @@ func TestPreRequest_BestIsChosen_NoHeader(t *testing.T) {
 // P/D: the prefill pod computes the prefix; when it is the best match the
 // header is not set even if the decode pod holds fewer blocks.
 func TestPreRequest_PrefillProfile_BestIsPrefill_NoHeader(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-pd-self", Headers: map[string]string{}}
@@ -202,7 +202,7 @@ func TestPreRequest_PrefillProfile_BestIsPrefill_NoHeader(t *testing.T) {
 
 // P/D: a third pod out-caches the chosen prefill pod by >= delta: header set.
 func TestPreRequest_PrefillProfile_HeaderFromThirdPod(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-pd-third", Headers: map[string]string{}}
@@ -223,7 +223,7 @@ func TestPreRequest_PrefillProfile_HeaderFromThirdPod(t *testing.T) {
 // Inbound (spoofed) header is removed even when no best-match attribute was
 // stashed.
 func TestPreRequest_DeletesInboundHeader(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{
@@ -249,7 +249,7 @@ func TestConsumes_DeclaresPrefixCacheMatchInfo(t *testing.T) {
 // IPv6 endpoint addresses are emitted bracketed via net.JoinHostPort so the
 // sidecar's host:port validation accepts them.
 func TestPreRequest_IPv6HeaderBracketed(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	best := net.JoinHostPort("fd00::2", "8080")
@@ -266,7 +266,7 @@ func TestPreRequest_IPv6HeaderBracketed(t *testing.T) {
 
 // Produce emits a bracketed host:port for an IPv6 candidate.
 func TestProduce_IPv6BestMatchBracketed(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-ipv6-produce"}
@@ -280,7 +280,7 @@ func TestProduce_IPv6BestMatchBracketed(t *testing.T) {
 // A renamed prefill profile is honored: the comparison is against the prefill
 // pod under the configured name, not the primary decode pod.
 func TestPreRequest_ConfiguredPrefillProfileName(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	p := New("test", Config{MinCachedTokenDelta: 1, PrefillProfileName: "P"})
 
 	req := &scheduling.InferenceRequest{RequestID: "req-custom-profile", Headers: map[string]string{}}

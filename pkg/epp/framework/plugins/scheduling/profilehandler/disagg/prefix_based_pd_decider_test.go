@@ -14,7 +14,7 @@ import (
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 const (
@@ -283,7 +283,7 @@ func TestPrefixBasedPDDeciderFactory(t *testing.T) {
 }
 
 func TestDisaggregate(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tests := []struct {
 		name               string
@@ -411,7 +411,7 @@ func TestDisaggregate(t *testing.T) {
 // Issue parameters: blockSize=16, inputTokens=4096, a 240-block contiguous hit
 // (3840 cached tokens, real non-cached suffix 256), threshold 512.
 func TestDisaggregate_UsesUnweightedCachedBlockCount(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	const (
 		blockSize        = 16
@@ -449,7 +449,7 @@ func TestDisaggregate_UsesUnweightedCachedBlockCount(t *testing.T) {
 }
 
 func TestDisaggregateNoPrefixInfo(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	ep := makeTestEndpointBase()
 
@@ -460,7 +460,7 @@ func TestDisaggregateNoPrefixInfo(t *testing.T) {
 }
 
 func TestDisaggregateWrongPrefixInfoType(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	ep := makeTestEndpointBase()
 	ep.Put(attrprefix.PrefixCacheMatchInfoDataKey.String(), &notPrefixCacheMatchInfo{})

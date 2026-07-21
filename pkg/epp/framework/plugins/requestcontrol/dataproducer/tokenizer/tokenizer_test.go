@@ -32,7 +32,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 type mockTokenizer struct {
@@ -78,7 +78,7 @@ func TestProduceTimeout(t *testing.T) {
 }
 
 func TestPluginFactory_Validation(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	handle := plugin.NewEppHandle(ctx, nil)
 
 	tests := []struct {

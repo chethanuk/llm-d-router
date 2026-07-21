@@ -14,7 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package utils contains utilities for testing
+//
+//revive:disable:var-naming
 package utils
+
+//revive:enable:var-naming
 
 import (
 	"context"

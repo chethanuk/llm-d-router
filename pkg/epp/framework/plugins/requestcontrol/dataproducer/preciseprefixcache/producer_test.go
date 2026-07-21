@@ -36,7 +36,7 @@ import (
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/prefix"
-	"github.com/llm-d/llm-d-router/test/utils"
+	fwkcontext "github.com/llm-d/llm-d-router/test/framework/context"
 )
 
 type fakeKVCacheIndexer struct {
@@ -151,7 +151,7 @@ func newProducerWithIndexer(ctx context.Context, idx kvCacheIndexer, scorer kvca
 
 // Tokens present → Produce hashes and writes per-endpoint match info.
 func TestProduce_UsesTokenizedPrompt(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tokens := []uint32{10, 20, 30, 40, 50}
 	wantKey := kvblock.BlockHash(0xCAFE)
@@ -207,7 +207,7 @@ func TestProduce_UsesTokenizedPrompt(t *testing.T) {
 
 // No tokens → no-op (no prompt-string fallback).
 func TestProduce_NoTokens_NoOp(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	idx := &fakeKVCacheIndexer{
 		computeFromTokens: func(_ context.Context, _ []uint32, _ string, _ []*kvblock.BlockExtraFeatures) ([]kvblock.BlockHash, error) {
 			t.Fatalf("ComputeBlockKeysFromTokens must not be called when no tokens")
@@ -229,7 +229,7 @@ func TestProduce_NoTokens_NoOp(t *testing.T) {
 
 // Empty TokenIDs → no-op.
 func TestProduce_EmptyTokenizedPrompt_NoOp(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	idx := &fakeKVCacheIndexer{
 		computeFromTokens: func(_ context.Context, _ []uint32, _ string, _ []*kvblock.BlockExtraFeatures) ([]kvblock.BlockHash, error) {
 			t.Fatalf("ComputeBlockKeysFromTokens must not be called for empty TokenIDs")
@@ -251,7 +251,7 @@ func TestProduce_EmptyTokenizedPrompt_NoOp(t *testing.T) {
 }
 
 func TestProduce_MultiPromptEmptyBlockKeys_NoOp(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	endpoints := freshEndpoints()
 
 	promptA := []uint32{1, 2, 3, 4, 5, 6, 7, 8}
@@ -299,7 +299,7 @@ func TestProduce_MultiPromptEmptyBlockKeys_NoOp(t *testing.T) {
 }
 
 func TestProduce_MultiPromptSkipsEmptyPromptKeys(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	endpoints := freshEndpoints()
 
 	shortPrompt := []uint32{1, 2, 3, 4, 5, 6, 7, 8}
@@ -371,7 +371,7 @@ func TestProduce_MultiPromptSkipsEmptyPromptKeys(t *testing.T) {
 // Per-tier contiguous counts are attached per endpoint and summed across
 // prompts; endpoints without tier data get a non-nil empty map.
 func TestProduce_WritesCachedBlocksByTier(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	endpoints := freshEndpoints()
 
 	promptA := []uint32{1, 2, 3, 4, 5, 6, 7, 8}
@@ -443,7 +443,7 @@ func TestProduce_WritesCachedBlocksByTier(t *testing.T) {
 
 // Multimodal features flow through to ComputeBlockKeysFromTokens.
 func TestProduce_PassesMMExtraFeatures(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tokens := make([]uint32, 16)
 	for i := range tokens {
@@ -487,7 +487,7 @@ func TestProduce_PassesMMExtraFeatures(t *testing.T) {
 // prompts. Mirrors engine-side ingestion, which folds vLLM's block-0 cache_salt
 // into the same per-block hash list.
 func TestProduce_FoldsCacheSalt(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tokens := make([]uint32, 16)
 	for i := range tokens {
@@ -544,7 +544,7 @@ func TestProduce_FoldsCacheSalt(t *testing.T) {
 
 // No salt → extra features stay untouched (nil for a text-only prompt).
 func TestProduce_NoCacheSalt_NoExtraFeatures(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 
 	tokens := make([]uint32, 16)
 	for i := range tokens {
@@ -574,7 +574,7 @@ func TestProduce_NoCacheSalt_NoExtraFeatures(t *testing.T) {
 
 // nil request / empty body → don't touch the indexer.
 func TestProduce_NoOpPaths(t *testing.T) {
-	ctx := utils.NewTestContext(t)
+	ctx := fwkcontext.NewTestContext(t)
 	idx := &fakeKVCacheIndexer{
 		computeFromTokens: func(_ context.Context, _ []uint32, _ string, _ []*kvblock.BlockExtraFeatures) ([]kvblock.BlockHash, error) {
 			t.Fatalf("ComputeBlockKeysFromTokens must not be called")
@@ -590,7 +590,7 @@ func TestProduce_NoOpPaths(t *testing.T) {
 
 // Tokens-only: reject legacy tokenizersPoolConfig at factory time.
 func TestPluginFactory_RejectsTokenizersPoolConfig(t *testing.T) {
-	handle := plugin.NewEppHandle(utils.NewTestContext(t), nil)
+	handle := plugin.NewEppHandle(fwkcontext.NewTestContext(t), nil)
 	raw := json.RawMessage(`{"indexerConfig":{"tokenizersPoolConfig":{"modelName":"x"}}}`)
 
 	_, err := PluginFactory("test", plugin.StrictDecoder(raw), handle)
@@ -634,7 +634,7 @@ func TestNew_BlockSizeFlowsViaTokenProcessor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// Cancel on test exit so the indexer.Run + kvevents pool workers
 			// New() launches don't outlive the subtest.
-			ctx, cancel := context.WithCancel(utils.NewTestContext(t))
+			ctx, cancel := context.WithCancel(fwkcontext.NewTestContext(t))
 			t.Cleanup(cancel)
 
 			idxCfg, err := kvcache.NewDefaultConfig()
