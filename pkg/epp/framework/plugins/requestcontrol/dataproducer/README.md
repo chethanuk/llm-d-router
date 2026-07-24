@@ -21,6 +21,7 @@ Producers may also implement additional lifecycle hooks:
 | `inflight-load-producer` | [`inflightload`](inflightload/) | `InFlightLoad` | Tracks real-time in-flight request and token counts per endpoint across the full request lifecycle. |
 | `predicted-latency-producer` | [`predictedlatency`](predictedlatency/) | `LatencyPredictionInfo` | Trains XGBoost models via a sidecar and generates per-endpoint TTFT/TPOT predictions. |
 | `session-id-producer` | [`sessionid`](sessionid/) | `SessionID` | Extracts a session identifier from a request header or cookie and publishes it for affinity-aware plugins. |
+| `session-prefix-cache-producer` | [`sessionprefixcache`](sessionprefixcache/) | `PrefixCacheMatchInfo` | Tokenizer-free, stock-engine prefix-cache affinity: hashes framed request content into fixed-size byte chunks and matches against a per-pod LRU of content-verified chains. |
 | `mm-embeddings-cache-producer` | [`multimodal`](multimodal/) | `EncoderCacheMatchInfo` | Tracks which pods recently processed each multimodal input hash and scores encoder-cache affinity. |
 | `p2p-source-producer` | [`p2psource`](p2psource/) | request attribute only | Sets the `x-kv-cache-source-host-port` header to the candidate holding the most cached prefix tokens when it out-caches the pod computing the prefix, for P2P KV pulls. |
 
@@ -44,4 +45,5 @@ The framework resolves a DAG from each plugin's `Produces` and `Consumes` declar
 - [In-Flight Load Producer](inflightload/README.md)
 - [Predicted Latency Producer](predictedlatency/README.md)
 - [Session ID Producer](sessionid/README.md)
+- [Session Prefix Cache Producer](sessionprefixcache/README.md)
 - [Multimodal Embeddings Cache Producer](multimodal/README.md)
