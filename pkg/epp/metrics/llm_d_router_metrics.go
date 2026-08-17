@@ -25,7 +25,7 @@ import (
 
 const (
 	// LLMDRouterEndpointPickerSubsystem is the subsystem for llm-d router endpoint picker metrics.
-	LLMDRouterEndpointPickerSubsystem = "llm_d_epp"
+	LLMDRouterEndpointPickerSubsystem = metricsutil.LLMDRouterEndpointPickerSubsystem
 )
 
 var (
@@ -280,6 +280,18 @@ var (
 		[]string{"extension_point", "plugin_type", "plugin_name"},
 	)
 
+	llmdPluginDataScopeViolations = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "plugin_data_scope_violations_total",
+			Help: metricsutil.HelpMsgWithStability("Total number of endpoint attribute accesses rejected because the "+
+				"plugin did not declare the DataKey in Produces() or Consumes(), by extension point, plugin type, "+
+				"plugin name and access kind (read or write). A non-zero value means a plugin's implementation has "+
+				"drifted from its declaration; rejected reads resolve as absent and rejected writes are dropped.", compbasemetrics.ALPHA),
+		},
+		[]string{"extension_point", "plugin_type", "plugin_name", "access"},
+	)
+
 	llmdRequestProcessingLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Subsystem: LLMDRouterEndpointPickerSubsystem,
@@ -375,9 +387,28 @@ var (
 		prometheus.GaugeOpts{
 			Subsystem: LLMDRouterEndpointPickerSubsystem,
 			Name:      "flow_control_pool_saturation",
-			Help:      metricsutil.HelpMsgWithStability("Current saturation level of the inference pool (0.0 = empty, 1.0 = fully saturated).", compbasemetrics.ALPHA),
+			Help: metricsutil.HelpMsgWithStability(
+				"Pool saturation signal gating Flow Control dispatch. 1.0 is the gating set point; values above 1.0 "+
+					"indicate the magnitude of oversubscription past it. An empty pool reads as 1.0. With the default "+
+					"utilization detector, endpoints with missing or stale metrics score as fully saturated "+
+					"(fail-closed; see flow_control_stale_endpoints).",
+				compbasemetrics.ALPHA),
 		},
 		[]string{"inference_pool"},
+	)
+
+	llmdFlowControlStaleEndpoints = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_stale_endpoints",
+			Help: metricsutil.HelpMsgWithStability(
+				"Number of candidate endpoints whose metrics are missing or older than the staleness threshold, as of "+
+					"the most recent saturation evaluation. Recorded by the utilization saturation detector, which scores "+
+					"these endpoints as fully saturated in flow_control_pool_saturation (fail-closed): a nonzero value "+
+					"during a dispatch stall indicates a metrics collection problem rather than genuine overload.",
+				compbasemetrics.ALPHA),
+		},
+		[]string{"detector"},
 	)
 
 	llmdFlowControlRequestsTotal = prometheus.NewCounterVec(
@@ -387,6 +418,52 @@ var (
 			Help:      metricsutil.HelpMsgWithStability("Total number of requests processed by the Flow Control layer.", compbasemetrics.ALPHA),
 		},
 		[]string{"outcome", "priority", "inference_pool"},
+	)
+
+	llmdFlowControlRevocationsIssuedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_revocations_issued_total",
+			Help:      metricsutil.HelpMsgWithStability("Total number of in-flight eviction revocations issued, labeled by the demand band's priority.", compbasemetrics.ALPHA),
+		},
+		[]string{"priority", "inference_pool"},
+	)
+
+	llmdFlowControlRevocationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_revocations_total",
+			Help:      metricsutil.HelpMsgWithStability("Total number of in-flight eviction revocations by terminal outcome (confirmed, timed_out). Every issued revocation eventually increments exactly one outcome.", compbasemetrics.ALPHA),
+		},
+		[]string{"outcome", "inference_pool"},
+	)
+
+	llmdFlowControlReclaimTarget = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_reclaim_target",
+			Help:      metricsutil.HelpMsgWithStability("Last computed reclamation deficit, in saturation-gauge units.", compbasemetrics.ALPHA),
+		},
+		[]string{"inference_pool"},
+	)
+
+	llmdFlowControlPendingReclaim = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_pending_reclaim",
+			Help:      metricsutil.HelpMsgWithStability("Sum of outstanding and cooling pending-reclaim debits, in saturation-gauge units.", compbasemetrics.ALPHA),
+		},
+		[]string{"inference_pool"},
+	)
+
+	llmdFlowControlRevocationConfirmationDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "flow_control_revocation_confirmation_seconds",
+			Help:      metricsutil.HelpMsgWithStability("Time from revocation issue to confirmed stream termination.", compbasemetrics.ALPHA),
+			Buckets:   []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10},
+		},
+		[]string{"inference_pool"},
 	)
 )
 

@@ -34,8 +34,9 @@ type EndpointPickerConfig struct {
 	metav1.TypeMeta `json:",inline"`
 
 	// +optional
-	// FeatureGates is a set of flags that enable various experimental features with the EPP.
-	// If omitted none of these experimental features will be enabled.
+	// FeatureGates is a set of flags that toggle optional EPP features. Each entry is a gate name,
+	// optionally suffixed with "=true" or "=false" (a bare name means "=true"). Gates carry
+	// per-gate defaults that apply when omitted; some default to enabled.
 	FeatureGates FeatureGates `json:"featureGates,omitempty"`
 
 	// +required
@@ -186,7 +187,8 @@ func (sp SchedulingPlugin) String() string {
 	return "{" + strings.Join(parts, ", ") + "}"
 }
 
-// FeatureGates is a set of flags that enable various experimental features with the EPP
+// FeatureGates is a set of flags that toggle optional EPP features ("name", "name=true", or
+// "name=false"); omitted gates use their registered defaults.
 type FeatureGates []string
 
 func (fg FeatureGates) String() string {
@@ -238,13 +240,29 @@ type DataLayerConfig struct {
 	// endpoints. This enables running the EPP without a Kubernetes cluster.
 	// If omitted, the EPP uses the default Kubernetes-based discovery.
 	Discovery *DiscoveryConfig `json:"discovery,omitempty"`
+	// +optional
+	// PeerDiscovery specifies which PeerDiscovery plugin to use for discovering
+	// peer EPP replicas. If omitted, peer discovery is disabled.
+	PeerDiscovery *PeerDiscoveryConfig `json:"peerDiscovery,omitempty"`
+	// +optional
+	// CrossReplicaSyncerPluginRef names the plugin instance to use as the cross-EPP
+	// cross-replica syncer. The reference is to the name of an entry in the
+	// top-level Plugins section. If omitted, no cross-replica syncer is used
+	// and plugins that read cross-replica state fall back to local data.
+	CrossReplicaSyncerPluginRef string `json:"crossReplicaSyncerPluginRef,omitempty"`
+	// +optional
+	// CrossReplicaSyncInterval is the cadence at which each replica publishes
+	// its local per-endpoint state to the cross-replica syncer. It is rounded
+	// to a multiple of the datalayer base tick. If omitted, a default is used.
+	CrossReplicaSyncInterval *metav1.Duration `json:"crossReplicaSyncInterval,omitempty"`
 }
 
 func (dlc *DataLayerConfig) String() string {
 	if dlc == nil {
 		return nilString
 	}
-	return fmt.Sprintf("{Sources: %v, Discovery: %v}", dlc.Sources, dlc.Discovery)
+	return fmt.Sprintf("{Sources: %v, Discovery: %v, PeerDiscovery: %v, CrossReplicaSyncerPluginRef: %s, CrossReplicaSyncInterval: %v}",
+		dlc.Sources, dlc.Discovery, dlc.PeerDiscovery, dlc.CrossReplicaSyncerPluginRef, dlc.CrossReplicaSyncInterval)
 }
 
 // DiscoveryConfig references the EndpointDiscovery plugin to use.
@@ -261,6 +279,22 @@ func (dc *DiscoveryConfig) String() string {
 		return nilString
 	}
 	return fmt.Sprintf("{PluginRef: %s}", dc.PluginRef)
+}
+
+// PeerDiscoveryConfig references the PeerDiscovery plugin to use.
+type PeerDiscoveryConfig struct {
+	// +required
+	// +kubebuilder:validation:Required
+	// PluginRef is the name of the plugin instance (from the Plugins list) that
+	// implements PeerDiscovery.
+	PluginRef string `json:"pluginRef"`
+}
+
+func (pdc *PeerDiscoveryConfig) String() string {
+	if pdc == nil {
+		return nilString
+	}
+	return fmt.Sprintf("{PluginRef: %s}", pdc.PluginRef)
 }
 
 // DataLayerSource contains the configuration of a DataSource of the DataLayer feature
@@ -406,6 +440,14 @@ type FlowControlConfig struct {
 	// SaturationDetector specifies which saturation detector plugin to use for both Admission and
 	// Flow Control. If omitted, "utilization-detector" is used by default.
 	SaturationDetector *SaturationDetectorConfig `json:"saturationDetector,omitempty"`
+
+	// +optional
+	// EnableEviction enables demand-driven in-flight eviction. When higher-priority requests are
+	// blocked by pool saturation, lower-priority in-flight requests (priority < 0) may be
+	// terminated to reclaim capacity. Pacing and sizing self-configure from the selected
+	// saturation detector. See docs/flow-control-eviction.md.
+	// Defaults to false.
+	EnableEviction bool `json:"enableEviction,omitempty"`
 }
 
 func (fcc *FlowControlConfig) String() string {
@@ -448,6 +490,10 @@ func (fcc *FlowControlConfig) String() string {
 
 	if fcc.SaturationDetector != nil {
 		parts = append(parts, fmt.Sprintf("SaturationDetector: %v", fcc.SaturationDetector))
+	}
+
+	if fcc.EnableEviction {
+		parts = append(parts, "EnableEviction: true")
 	}
 
 	return "{" + strings.Join(parts, ", ") + "}"
