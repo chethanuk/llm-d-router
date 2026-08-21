@@ -55,9 +55,9 @@ import (
 	dlmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/mocks"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 	eppServer "github.com/llm-d/llm-d-router/pkg/epp/server"
+	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
 	fwkk8s "github.com/llm-d/llm-d-router/test/framework/k8s"
 	fwknet "github.com/llm-d/llm-d-router/test/framework/net"
-	integration "github.com/llm-d/llm-d-router/test/integration"
 )
 
 // Global State (Initialized in TestMain)
@@ -285,7 +285,7 @@ func NewTestHarness(ctx context.Context, t *testing.T, opts ...HarnessOption) *T
 		<-mgrDone
 	})
 
-	extProcClient, conn := integration.ExtProcServerClient(
+	extProcClient, conn := fwkepp.ExtProcServerClient(
 		mgrCtx,
 		t,
 		grpcPort,
