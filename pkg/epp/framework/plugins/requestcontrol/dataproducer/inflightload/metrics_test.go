@@ -79,13 +79,12 @@ llm_d_epp_inflight_tokens{endpoint_name="ep1",fairness_id="",namespace="default"
 		require.NoError(t, promtestutil.CollectAndCompare(inflightTokens, strings.NewReader(expectedTokens), "llm_d_epp_inflight_tokens"))
 	}
 
-	// Admission: 4 input + UnknownOutputTokens estimated output (no outlen-bucket
-	// attribute in this unit test) = 4+UnknownOutputTokens tokens, 1 request.
+	// Admission: 4 input + 6 estimated output = 10 tokens, 1 request.
 	req := makeTokenRequest("req-gauge-lifecycle", 4)
 	res := makeSchedulingResult("ep1")
 	err := producer.PreRequest(ctx, req, res)
 	require.NoError(t, err)
-	expect(t, 1, 4+UnknownOutputTokens)
+	expect(t, 1, 10)
 
 	// Completion: series stay present at zero.
 	req.SchedulingResult = res
@@ -120,11 +119,10 @@ llm_d_epp_inflight_requests{endpoint_name="ep1",fairness_id="custom-tenant",name
 `
 	require.NoError(t, promtestutil.CollectAndCompare(inflightRequests, strings.NewReader(expectedRequests), "llm_d_epp_inflight_requests"))
 
-	// 1004 = 4 input tokens + UnknownOutputTokens (no outlen-bucket attribute set).
 	expectedTokens := `
 # HELP llm_d_epp_inflight_tokens [ALPHA] Current number of in-flight tokens per endpoint (uncached prompt tokens, optionally plus estimated output), as tracked by the in-flight load producer.
 # TYPE llm_d_epp_inflight_tokens gauge
-llm_d_epp_inflight_tokens{endpoint_name="ep1",fairness_id="custom-tenant",namespace="default",priority="3",producer_name="inflight-load-producer"} 1004
+llm_d_epp_inflight_tokens{endpoint_name="ep1",fairness_id="custom-tenant",namespace="default",priority="3",producer_name="inflight-load-producer"} 10
 `
 	require.NoError(t, promtestutil.CollectAndCompare(inflightTokens, strings.NewReader(expectedTokens), "llm_d_epp_inflight_tokens"))
 
@@ -313,4 +311,35 @@ func TestAddedTokensEntry_Clone(t *testing.T) {
 	require.Equal(t, entry.priority, cloned.priority)
 	require.Equal(t, int64(15), cloned.tokens.Load())
 	require.Equal(t, int32(1), cloned.requests.Load())
+}
+
+func TestDeleteEndpointPrunesMetrics(t *testing.T) {
+	resetMetricsForTest()
+
+	reg := prometheus.NewRegistry()
+	require.NoError(t, registerMetrics(reg))
+
+	ctx := context.Background()
+	p := newTestProducer(t, "producer-del")
+
+	req := newTestRequestContext("req-del", "model-1")
+	req.FairnessID = "flow-del"
+	req.Priority = 1
+
+	ep := testutils.MakeEndpoint("default/ep-del").ObjRef()
+	res := &fwksched.Result{ProfileName: "test-profile", TargetEndpoints: map[string]fwksched.Endpoint{"ep-del": ep}}
+
+	p.PreRequest(ctx, req, res)
+
+	expectedRequests := `
+# HELP llm_d_epp_inflight_requests [ALPHA] Current number of in-flight requests per endpoint, as tracked by the in-flight load producer.
+# TYPE llm_d_epp_inflight_requests gauge
+llm_d_epp_inflight_requests{endpoint_name="ep-del",fairness_id="flow-del",namespace="default",priority="1",producer_name="producer-del"} 1
+`
+	require.NoError(t, promtestutil.CollectAndCompare(inflightRequests, strings.NewReader(expectedRequests), "llm_d_epp_inflight_requests"))
+
+	p.DeleteEndpoint("default/ep-del")
+
+	require.Equal(t, 0, promtestutil.CollectAndCount(inflightRequests))
+	require.Equal(t, 0, promtestutil.CollectAndCount(inflightTokens))
 }
