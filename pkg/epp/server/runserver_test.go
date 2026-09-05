@@ -76,10 +76,10 @@ func TestNewExtProcServerRunnerPopulatesEveryField(t *testing.T) {
 	opts.GRPCMaxRecvMsgSize, opts.GRPCMaxSendMsgSize = 4<<20, 5<<20
 
 	ds, sd := &stubDatastore{}, &fwkfcmocks.MockSaturationDetector{}
+	director, registry, bands := &requestcontrol.Director{}, &handlers.ParserRegistry{}, &stubBands{}
 	r := server.NewExtProcServerRunner(opts,
 		common.GKNN{NamespacedName: types.NamespacedName{Name: "pool", Namespace: "ns"}},
-		server.NewControllerConfig(true), ds, &requestcontrol.Director{},
-		&handlers.ParserRegistry{}, sd, &stubBands{})
+		server.NewControllerConfig(true), ds, director, registry, sd, bands)
 
 	v := reflect.ValueOf(*r)
 	fields := reflect.VisibleFields(reflect.TypeOf(*r))
@@ -91,11 +91,65 @@ func TestNewExtProcServerRunnerPopulatesEveryField(t *testing.T) {
 		}
 	}
 
-	// IsZero cannot see two fields wired to each other's source, so pin the pairs.
+	// IsZero cannot see two fields wired to each other's source, so pin every field that
+	// shares its type with another one: the three ints, the two durations, and each
+	// dependency. The bools cannot be told apart by value and are covered by
+	// TestNewExtProcServerRunnerMapsEachBoolOption below.
 	require.Equal(t, 4<<20, r.GRPCMaxRecvMsgSize)
 	require.Equal(t, 5<<20, r.GRPCMaxSendMsgSize)
 	require.Equal(t, 19002, r.GrpcPort)
 	require.Equal(t, uint16(tls.VersionTLS13), r.TLSMinVersion)
+	require.Equal(t, 7*time.Second, r.RefreshPrometheusMetricsInterval)
+	require.Equal(t, 11*time.Second, r.MetricsStalenessThreshold)
 	require.Same(t, ds, r.Datastore)
+	require.Same(t, director, r.Director)
+	require.Same(t, registry, r.ParserRegistry)
 	require.Same(t, sd, r.SaturationDetector)
+	require.Same(t, bands, r.PriorityBandControlPlane)
+}
+
+// boolOptions pairs each boolean Options field the factory reads with the runner field it
+// must land in.
+var boolOptions = []struct {
+	name string
+	set  func(*server.Options, bool)
+	get  func(*server.ExtProcServerRunner) bool
+}{
+	{"SecureServing",
+		func(o *server.Options, v bool) { o.SecureServing = v },
+		func(r *server.ExtProcServerRunner) bool { return r.SecureServing }},
+	{"HealthChecking",
+		func(o *server.Options, v bool) { o.HealthChecking = v },
+		func(r *server.ExtProcServerRunner) bool { return r.HealthChecking }},
+	{"EnableCertReload",
+		func(o *server.Options, v bool) { o.EnableCertReload = v },
+		func(r *server.ExtProcServerRunner) bool { return r.EnableCertReload }},
+	{"EnableGRPCStreamMetrics",
+		func(o *server.Options, v bool) { o.EnableGRPCStreamMetrics = v },
+		func(r *server.ExtProcServerRunner) bool { return r.EnableGRPCStreamMetrics }},
+	{"EmitEndpointScores",
+		func(o *server.Options, v bool) { o.EmitEndpointScores = v },
+		func(r *server.ExtProcServerRunner) bool { return r.EmitEndpointScores }},
+}
+
+// TestNewExtProcServerRunnerMapsEachBoolOption sets one boolean option at a time and
+// asserts exactly one runner field follows. Every bool holding the same value cannot
+// distinguish a swapped pair, which is the wiring mistake the all-true sweep above misses.
+func TestNewExtProcServerRunnerMapsEachBoolOption(t *testing.T) {
+	for _, tc := range boolOptions {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := server.NewOptions()
+			for _, o := range boolOptions {
+				o.set(opts, false) // NewOptions defaults SecureServing to true
+			}
+			tc.set(opts, true)
+
+			r := server.NewExtProcServerRunner(opts, common.GKNN{},
+				server.NewControllerConfig(true), nil, nil, nil, nil, nil)
+
+			for _, o := range boolOptions {
+				require.Equal(t, o.name == tc.name, o.get(r), "runner field %s", o.name)
+			}
+		})
+	}
 }

@@ -123,8 +123,8 @@ func NewExtProcServerRunner(
 }
 
 // NewDefaultExtProcServerRunner creates a runner with default values.
-// Note: Dependencies like Datastore, Scheduler, SD need to be set separately, hence the
-// nil arguments below.
+// Note: Dependencies like Datastore, Director, ParserRegistry, SaturationDetector, and
+// PriorityBandControlPlane need to be set separately, hence the nil arguments below.
 func NewDefaultExtProcServerRunner() *ExtProcServerRunner {
 	opts := NewOptions()
 	if opts.PoolNamespace == "" {
