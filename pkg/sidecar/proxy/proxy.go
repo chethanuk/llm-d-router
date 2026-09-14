@@ -47,6 +47,7 @@ const (
 
 	requestHeaderRequestID = reqcommon.RequestIDHeaderKey
 
+	requestFieldInput                = reqcommon.FieldInput
 	requestFieldKVTransferParams     = reqcommon.FieldKVTransferParams
 	requestFieldECTransferParams     = reqcommon.FieldECTransferParams
 	requestFieldMaxTokens            = reqcommon.FieldMaxTokens
