@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -302,7 +303,7 @@ func TestFanoutEncoderPrimerDeduplication(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			requestCount.Store(0)
-			err := srv.fanoutEncoderPrimer(context.Background(), tt.request, []string{encoderHostPort}, "test-req-id")
+			err := srv.fanoutEncoderPrimer(context.Background(), tt.request, []string{encoderHostPort}, "test-req-id", reqcommon.APITypeChatCompletions)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectedCalls, requestCount.Load())
 		})

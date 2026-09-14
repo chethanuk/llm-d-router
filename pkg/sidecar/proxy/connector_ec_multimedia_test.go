@@ -24,13 +24,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
+	"github.com/llm-d/llm-d-router/pkg/common/routing"
 )
 
 // TestHandleEC_Multimedia asserts that video_url, audio_url, and input_audio
@@ -175,6 +178,133 @@ func TestHandleEC_Multimedia(t *testing.T) {
 			} else {
 				_, present := parsed[requestFieldECTransferParams]
 				assert.False(t, present, "shared_storage primer must not add ec_transfer_params to the prefill body")
+			}
+		})
+	}
+}
+
+// TestHandleEC_APIInputs sends each API's request shape through the
+// disaggregated route with encoder headers and asserts how many multimodal
+// items reach the encoder before the P/D handoff.
+func TestHandleEC_APIInputs(t *testing.T) {
+	tests := []struct {
+		name         string
+		apiType      reqcommon.APIType
+		path         string
+		body         string
+		wantEncCalls int32
+	}{
+		{
+			name:         "chat image_url",
+			apiType:      reqcommon.APITypeChatCompletions,
+			path:         reqcommon.PathChatCompletions,
+			body:         `{"model":"m","messages":[{"role":"user","content":[{"type":"text","text":"describe"},{"type":"image_url","image_url":{"url":"https://example.com/a.jpg"}}]}],"max_tokens":800}`,
+			wantEncCalls: 1,
+		},
+		{
+			name:         "responses input_image with url string",
+			apiType:      reqcommon.APITypeResponses,
+			path:         reqcommon.PathResponses,
+			body:         `{"model":"m","input":[{"role":"user","content":[{"type":"input_text","text":"describe"},{"type":"input_image","image_url":"https://example.com/a.jpg"}]}],"max_output_tokens":800}`,
+			wantEncCalls: 1,
+		},
+		{
+			name:         "responses input_image with url object",
+			apiType:      reqcommon.APITypeResponses,
+			path:         reqcommon.PathResponses,
+			body:         `{"model":"m","input":[{"role":"user","content":[{"type":"input_image","image_url":{"url":"https://example.com/a.jpg"}}]}],"max_output_tokens":800}`,
+			wantEncCalls: 1,
+		},
+		{
+			name:         "responses duplicate input_image urls deduplicated",
+			apiType:      reqcommon.APITypeResponses,
+			path:         reqcommon.PathResponses,
+			body:         `{"model":"m","input":[{"role":"user","content":[{"type":"input_image","image_url":"https://example.com/a.jpg"},{"type":"input_image","image_url":{"url":"https://example.com/a.jpg"}},{"type":"input_image","image_url":"https://example.com/b.jpg"}]}]}`,
+			wantEncCalls: 2,
+		},
+		{
+			name:         "responses images across input items",
+			apiType:      reqcommon.APITypeResponses,
+			path:         reqcommon.PathResponses,
+			body:         `{"model":"m","input":["hi",{"role":"user","content":[{"type":"input_image","image_url":"https://example.com/a.jpg"}]},{"type":"function_call_output","call_id":"c","output":"x"},{"role":"user","content":[{"type":"input_image","image_url":"https://example.com/b.jpg"}]}]}`,
+			wantEncCalls: 2,
+		},
+		{
+			name:    "responses string input",
+			apiType: reqcommon.APITypeResponses,
+			path:    reqcommon.PathResponses,
+			body:    `{"model":"m","input":"hello"}`,
+		},
+		{
+			name:    "responses text-only input parts",
+			apiType: reqcommon.APITypeResponses,
+			path:    reqcommon.PathResponses,
+			body:    `{"model":"m","input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}]}`,
+		},
+		{
+			name:    "responses empty input",
+			apiType: reqcommon.APITypeResponses,
+			path:    reqcommon.PathResponses,
+			body:    `{"model":"m","input":[]}`,
+		},
+		{
+			name:    "responses without input",
+			apiType: reqcommon.APITypeResponses,
+			path:    reqcommon.PathResponses,
+			body:    `{"model":"m","previous_response_id":"resp_1"}`,
+		},
+		{
+			name:    "responses object input",
+			apiType: reqcommon.APITypeResponses,
+			path:    reqcommon.PathResponses,
+			body:    `{"model":"m","input":{"type":"input_image","image_url":"https://example.com/a.jpg"}}`,
+		},
+		{
+			name:    "generate token_ids",
+			apiType: reqcommon.APITypeGenerate,
+			path:    reqcommon.PathGenerate,
+			body:    `{"model":"m","token_ids":[1,2],"sampling_params":{"max_tokens":800}}`,
+		},
+	}
+
+	for _, connector := range []string{ECExampleConnector, ECConnectorNIXL} {
+		t.Run(connector, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					var encoderCalls atomic.Int32
+					encoder := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						n := encoderCalls.Add(1)
+						assert.Equal(t, reqcommon.PathChatCompletions, r.URL.Path)
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":""}}],"ec_transfer_params":{"hash-%d":{"peer_port":5500}}}`, n)
+					}))
+					defer encoder.Close()
+
+					decodeURL, err := url.Parse("http://decoder:8000")
+					require.NoError(t, err)
+					srv := NewProxy(Config{Port: "0", DecoderURL: decodeURL, ECConnector: connector})
+					srv.logger = log.Log
+					srv.allowlistValidator = &AllowlistValidator{}
+					var (
+						pdCalled   bool
+						gotAPIType reqcommon.APIType
+					)
+					srv.handlePDConnector = func(_ http.ResponseWriter, _ *http.Request, _ string, _ string, apiType reqcommon.APIType) {
+						pdCalled = true
+						gotAPIType = apiType
+					}
+
+					req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+					req.Header.Set(routing.PrefillEndpointHeader, "prefill:8000")
+					req.Header.Set(routing.EncoderEndpointsHeader, strings.TrimPrefix(encoder.URL, "http://"))
+					recorder := httptest.NewRecorder()
+					srv.disaggregatedPrefillHandler(tt.apiType)(recorder, req)
+
+					require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+					assert.Equal(t, tt.wantEncCalls, encoderCalls.Load(), "unexpected encoder call count")
+					assert.True(t, pdCalled, "handlePDConnector should have been invoked")
+					assert.Equal(t, tt.apiType, gotAPIType)
+				})
 			}
 		})
 	}

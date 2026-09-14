@@ -25,6 +25,7 @@ const (
 	// use the same revision.
 	RevisionDecisionIDHeaderKey = "x-llm-d-revision-decision-id"
 
+	FieldInput                = "input"
 	FieldKVTransferParams     = "kv_transfer_params"
 	FieldECTransferParams     = "ec_transfer_params"
 	FieldMaxTokens            = "max_tokens"
