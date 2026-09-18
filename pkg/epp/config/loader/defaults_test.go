@@ -18,6 +18,7 @@ package loader
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -250,5 +251,56 @@ func TestEnsureSaturationDetector_InjectsFilter(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, cfg.SchedulingProfiles[0].Plugins, 2, "already present, no duplicate")
+	})
+
+	t.Run("injectSaturationFilter opts a profile out", func(t *testing.T) {
+		tests := []struct {
+			name              string
+			prefillInject     *bool
+			wantPrefillFilter bool
+		}{
+			{"unset injects into both profiles", nil, true},
+			{"true injects into both profiles", ptr.To(true), true},
+			{"false skips only that profile", ptr.To(false), false},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				detectorName := "sat-detector"
+				cfg := &configapi.EndpointPickerConfig{
+					SchedulingProfiles: []configapi.SchedulingProfile{
+						{
+							Name:                   "prefill",
+							Plugins:                []configapi.SchedulingPlugin{{PluginRef: "scorer"}},
+							InjectSaturationFilter: tc.prefillInject,
+						},
+						{
+							Name:    "decode",
+							Plugins: []configapi.SchedulingPlugin{{PluginRef: "scorer"}},
+						},
+					},
+					FlowControl: &configapi.FlowControlConfig{
+						SaturationDetector: &configapi.SaturationDetectorConfig{PluginRef: detectorName},
+					},
+				}
+				handle := testutils.NewTestHandle(context.Background())
+				detector := &mockFilterDetector{mockPlugin{t: fwkplugin.TypedName{Type: detectorName, Name: detectorName}}}
+				handle.AddPlugin(detectorName, detector)
+
+				err := ensureSaturationDetector(cfg, handle, handle.GetAllPluginsWithNames())
+				require.NoError(t, err)
+
+				hasDetector := func(plugins []configapi.SchedulingPlugin) bool {
+					return slices.ContainsFunc(plugins, func(p configapi.SchedulingPlugin) bool {
+						return p.PluginRef == detectorName
+					})
+				}
+
+				require.Equal(t, tc.wantPrefillFilter, hasDetector(cfg.SchedulingProfiles[0].Plugins),
+					"prefill profile")
+				require.True(t, hasDetector(cfg.SchedulingProfiles[1].Plugins),
+					"decode omits the field, so it opts in and must always get the filter")
+			})
+		}
 	})
 }
