@@ -132,6 +132,14 @@ type SchedulingProfile struct {
 	// Plugins is the list of plugins for this SchedulingProfile. They are assigned
 	// to the appropriate "slots" based on their type.
 	Plugins []SchedulingPlugin `json:"plugins"`
+
+	// +optional
+	// InjectSaturationFilter controls automatic injection of the configured saturation
+	// detector as a filter into this profile, when that detector implements the Filter
+	// interface. Defaults to true when omitted. Set to false to keep this profile's plugin
+	// list exactly as written, which is what a disaggregated setup wants when only some of
+	// its prefill/decode/encode profiles should filter on saturation.
+	InjectSaturationFilter *bool `json:"injectSaturationFilter,omitempty"`
 }
 
 func (sp SchedulingProfile) String() string {

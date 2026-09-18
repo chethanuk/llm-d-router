@@ -308,8 +308,15 @@ func ensureSaturationDetector(
 	return nil
 }
 
+// injectFilterIntoProfiles appends pluginRef to every profile that does not already list it.
+// A profile opts out with InjectSaturationFilter: false, the same escape hatch ensureDataLayer
+// honours for DataLayer.InjectDefaults.
 func injectFilterIntoProfiles(profiles []configapi.SchedulingProfile, pluginRef string) {
 	for i := range profiles {
+		if profiles[i].InjectSaturationFilter != nil && !*profiles[i].InjectSaturationFilter {
+			continue
+		}
+
 		found := false
 		for _, p := range profiles[i].Plugins {
 			if p.PluginRef == pluginRef {
