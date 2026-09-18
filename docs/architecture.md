@@ -206,6 +206,9 @@ The fields in a schedulingProfile entry are:
 - **plugins**: references plugins that implement `Filter`, `Scorer`, or `Picker` to run when this scheduling profile is chosen for a request.
 - **pluginRef**: reference to the name of the plugin instance to be used
 - **weight**: weight to be used if the referenced plugin is a scorer.
+- **injectSaturationFilter**: whether the configured saturation detector is auto-injected into this
+  profile as a filter. Defaults to `true`; set it to `false` to keep this profile's `plugins` list
+  exactly as written.
 
 A complete configuration might look like this:
 
@@ -262,6 +265,9 @@ FlowControl:
   `--feature-gates=flowControl=true` on the command line.
 - `fcfs-ordering-policy`, `global-strict-fairness-policy`, and `static-usage-limit-policy` are configured when absent.
 - `utilization-detector` is configured as the saturation detector when none is set.
+- When the saturation detector also implements the scheduling `Filter` interface, it is appended to
+  every scheduling profile that does not already list it. Skipped for a profile whose
+  `injectSaturationFilter` is `false`.
 
 DataLayer:
 - `metrics-data-source` and `core-metrics-extractor` are injected and wired together. Skipped when
