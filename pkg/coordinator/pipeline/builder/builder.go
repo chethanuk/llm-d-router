@@ -57,7 +57,14 @@ func mergePipelineDefaults(params map[string]any, cfg config.PipelineConfig) map
 	for k, v := range params {
 		out[k] = v
 	}
-	if _, ok := out[steps.ParamKVConnector]; !ok && cfg.KVConnector != "" {
+	// Pipeline connector params describe the pipeline connector, so a step that
+	// names its own connector does not inherit them.
+	_, ownConnector := out[steps.ParamKVConnector]
+	_, ownParams := out[steps.ParamKVConnectorParams]
+	if !ownConnector && !ownParams && len(cfg.KVConnectorParams) > 0 {
+		out[steps.ParamKVConnectorParams] = cfg.KVConnectorParams
+	}
+	if !ownConnector && cfg.KVConnector != "" {
 		out[steps.ParamKVConnector] = cfg.KVConnector
 	}
 	if _, ok := out[steps.ParamECConnector]; !ok && cfg.ECConnector != "" {
