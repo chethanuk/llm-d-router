@@ -18,6 +18,7 @@ package kv
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -25,7 +26,8 @@ import (
 )
 
 func TestSGLangKV_Params(t *testing.T) {
-	c, err := Build(SGLang)
+	t.Setenv(envSGLangBootstrapPort, "")
+	c, err := Build(SGLang, nil)
 	if err != nil {
 		t.Fatalf("Build(%q): %v", SGLang, err)
 	}
@@ -49,8 +51,8 @@ func TestSGLangKV_Params(t *testing.T) {
 	if prefill["do_remote_prefill"] != false {
 		t.Errorf("prefill: do_remote_prefill = %v, want false", prefill["do_remote_prefill"])
 	}
-	if prefill[fieldBootstrapPort] != sglangBootstrapPort {
-		t.Errorf("prefill: %s = %v, want %d", fieldBootstrapPort, prefill[fieldBootstrapPort], sglangBootstrapPort)
+	if prefill[fieldBootstrapPort] != defaultSGLangBootstrapPort {
+		t.Errorf("prefill: %s = %v, want %d", fieldBootstrapPort, prefill[fieldBootstrapPort], defaultSGLangBootstrapPort)
 	}
 	room, ok := prefill[fieldBootstrapRoom].(string)
 	if !ok || room == "" {
@@ -71,13 +73,13 @@ func TestSGLangKV_Params(t *testing.T) {
 }
 
 func TestBuild_UnknownReturnsError(t *testing.T) {
-	if _, err := Build("does-not-exist"); err == nil {
+	if _, err := Build("does-not-exist", nil); err == nil {
 		t.Fatal("expected error for unknown connector")
 	}
 }
 
 func TestBuild_EmptyReturnsDefault(t *testing.T) {
-	c, err := Build("")
+	c, err := Build("", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +128,7 @@ func TestConnectors_KVParams(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, err := Build(tc.name)
+			c, err := Build(tc.name, nil)
 			if err != nil {
 				t.Fatalf("Build(%q): %v", tc.name, err)
 			}
@@ -141,6 +143,60 @@ func TestConnectors_KVParams(t *testing.T) {
 			}
 			if got := c.PrepareDecodeKVParams(context.Background(), reqCtx); !reflect.DeepEqual(got, tc.wantDecode) {
 				t.Errorf("decode params:\n got=%v\nwant=%v", got, tc.wantDecode)
+			}
+		})
+	}
+}
+
+func TestBuild_SGLangBootstrapPortParam(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		want    int
+		wantErr bool
+	}{
+		{name: "int", value: 9100, want: 9100},
+		{name: "int64", value: int64(9100), want: 9100},
+		{name: "integral float64", value: float64(9100), want: 9100},
+		{name: "json.Number", value: json.Number("9100"), want: 9100},
+		{name: "numeric string", value: "9100", want: 9100},
+		{name: "max valid", value: 65535, want: 65535},
+		{name: "fractional float64", value: 9100.5, wantErr: true},
+		{name: "bool", value: true, wantErr: true},
+		{name: "nil", value: nil, wantErr: true},
+		{name: "empty string", value: "", wantErr: true},
+		{name: "zero", value: 0, wantErr: true},
+		{name: "negative", value: -1, wantErr: true},
+		{name: "above range", value: 65536, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := Build(SGLang, map[string]any{paramBootstrapPort: tt.value})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("Build() = %v, want error", c)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Build(): %v", err)
+			}
+			got := c.PreparePrefillKVParams(context.Background(), &pipeline.RequestContext{})[fieldBootstrapPort]
+			if got != tt.want {
+				t.Errorf("%s = %v, want %d", fieldBootstrapPort, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuild_ParamsRejectedForParamlessConnectors(t *testing.T) {
+	for _, name := range []string{NIXL, SharedStorage, ""} {
+		t.Run("connector="+name, func(t *testing.T) {
+			if _, err := Build(name, map[string]any{"x": 1}); err == nil {
+				t.Error("Build() with params: want error")
+			}
+			if _, err := Build(name, map[string]any{}); err != nil {
+				t.Errorf("Build() with empty params: %v", err)
 			}
 		})
 	}
