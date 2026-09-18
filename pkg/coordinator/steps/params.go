@@ -25,8 +25,9 @@ import (
 
 // Parameter key constants for step configuration maps.
 const (
-	ParamKVConnector = "kv_connector"
-	ParamECConnector = "ec_connector"
+	ParamKVConnector       = "kv_connector"
+	ParamKVConnectorParams = "kv_connector_params"
+	ParamECConnector       = "ec_connector"
 )
 
 const ModalityImage = "image"
@@ -102,6 +103,17 @@ func paramString(params map[string]any, key string) (string, error) {
 	default:
 		return "", fmt.Errorf("%s: expected string, got %T", key, v)
 	}
+}
+
+// paramMap reads a map step parameter. A missing key returns nil; a key present
+// with a non-map value is a configuration error.
+func paramMap(params map[string]any, key string) (map[string]any, error) {
+	v := params[key]
+	m, ok := v.(map[string]any)
+	if !ok && v != nil {
+		return nil, fmt.Errorf("%s: expected a map, got %T", key, v)
+	}
+	return m, nil
 }
 
 // paramBool reads a boolean step parameter. A missing key returns ok=false so
