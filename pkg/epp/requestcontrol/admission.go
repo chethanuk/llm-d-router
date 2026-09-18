@@ -65,6 +65,12 @@ type flowController interface {
 	EnqueueAndWait(ctx context.Context, req flowcontrol.FlowControlRequest) (types.QueueOutcome, error)
 }
 
+// bandCapacitySource reads the live occupancy and configured limits of a priority band. It is the flow
+// registry's data plane narrowed to the single method the advisory headroom header needs.
+type bandCapacitySource interface {
+	CapacitySnapshot(priority int) (contracts.CapacitySnapshot, error)
+}
+
 // rejectIfSheddableAndSaturated checks if a request should be immediately rejected.
 func rejectIfSheddableAndSaturated(
 	ctx context.Context,
@@ -139,6 +145,7 @@ type FlowControlAdmissionController struct {
 	flowController     flowController
 	poolName           string
 	endpointCandidates contracts.EndpointCandidates
+	bandCapacity       bandCapacitySource
 }
 
 // NewFlowControlAdmissionController creates a new FlowControlAdmissionController.
@@ -146,12 +153,42 @@ func NewFlowControlAdmissionController(
 	fc flowController,
 	poolName string,
 	endpointCandidates contracts.EndpointCandidates,
+	bandCapacity bandCapacitySource,
 ) *FlowControlAdmissionController {
 	return &FlowControlAdmissionController{
 		flowController:     fc,
 		poolName:           poolName,
 		endpointCandidates: endpointCandidates,
+		bandCapacity:       bandCapacity,
 	}
+}
+
+// bandHeadroomRequests reports the priority band's remaining request capacity, clamped at zero.
+//
+// The clamp is a comparison rather than a subtraction on purpose: Len and CapacityRequests are both
+// uint64, so a band 20 requests over a capacity of 100 would wrap to 18446744073709551596 and
+// advertise near-infinite headroom on an over-full band, the exact inverse of the truth at the moment
+// a client is relying on it to back off.
+//
+// Reports false when no registry is wired, when the band is not configured, or when the band enforces
+// no request limit. All three mean "no reading", which the response path renders as an absent header
+// rather than as zero, so that a zero stays unambiguous: the band is full.
+func (fcac *FlowControlAdmissionController) bandHeadroomRequests(priority int) (uint64, bool) {
+	if fcac.bandCapacity == nil {
+		return 0, false
+	}
+	snapshot, err := fcac.bandCapacity.CapacitySnapshot(priority)
+	if err != nil {
+		return 0, false
+	}
+	band := snapshot.Band
+	if band.CapacityRequests == 0 {
+		return 0, false
+	}
+	if band.Len >= band.CapacityRequests {
+		return 0, true
+	}
+	return band.CapacityRequests - band.Len, true
 }
 
 // Admit implements the AdmissionController interface by deferring the admission decision to the Flow Control system
@@ -199,6 +236,11 @@ func (fcac *FlowControlAdmissionController) Admit(
 	if outcome == types.QueueOutcomeDispatched {
 		reqCtx.FlowControlQueueDuration = time.Since(start)
 		reqCtx.FlowControlAdmitted = true
+		// Deferred, not evaluated here: the headroom reading is only useful to a client pacing its next
+		// submissions if it reflects the band as the response passes, and a queued request can wait an
+		// unbounded time between admission and that point. The closure binds the band this request
+		// actually occupied, which is the same priority flowControlRequest.FlowKey reports.
+		reqCtx.FlowBandHeadroomRequests = func() (uint64, bool) { return fcac.bandHeadroomRequests(priority) }
 	}
 	logger.V(logutil.DEBUG).Info("Flow control outcome",
 		"requestID", reqCtx.SchedulingRequest.RequestID, "outcome", outcome, "error", err)
