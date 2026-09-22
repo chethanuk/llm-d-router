@@ -5,10 +5,7 @@ Add one of the following kinds:
 /kind cleanup
 /kind documentation
 /kind feature
-/kind test
-
-Optionally add one or more of the following kinds if applicable:
-/kind deprecation
+/kind testing
 -->
 
 **What this PR does / why we need it**:

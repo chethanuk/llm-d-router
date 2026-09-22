@@ -31,7 +31,8 @@ jobs:
 
           # Extract /kind values from PR body. Absence of a directive is a no-op
           # to avoid wiping kind/* labels set by maintainers through the UI.
-          kinds=$(printf '%s' "$PR_BODY" | tr -d '\r' | sed -n 's|^/kind[[:space:]][[:space:]]*||p' | \
+          # Drop HTML comments first; directives inside them are not visible on the PR.
+          kinds=$(printf '%s' "$PR_BODY" | tr -d '\r' | perl -0777 -pe 's/<!--.*?-->//gs' | sed -n 's|^/kind[[:space:]][[:space:]]*||p' | \
             sed 's|[[:space:]]*$||' | sed '/^$/d' | sort -u)
           [ -z "$kinds" ] && exit 0
 
@@ -72,7 +73,8 @@ jobs:
 
           # Absence of a directive is a no-op. Area labels are also set by the
           # /area comment command and clearing here would wipe those.
-          areas=$(printf '%s' "$PR_BODY" | tr -d '\r' | sed -n 's|^/area[[:space:]][[:space:]]*||p' | \
+          # Drop HTML comments first; directives inside them are not visible on the PR.
+          areas=$(printf '%s' "$PR_BODY" | tr -d '\r' | perl -0777 -pe 's/<!--.*?-->//gs' | sed -n 's|^/area[[:space:]][[:space:]]*||p' | \
             sed 's|[[:space:]]*$||' | sed '/^$/d' | sort -u)
           [ -z "$areas" ] && exit 0
 
@@ -110,7 +112,8 @@ jobs:
           esc() { local s=$1; s=${s//'%'/%25}; s=${s//$'\r'/%0D}; s=${s//$'\n'/%0A}; printf '%s' "$s"; }
 
           # Use the last /milestone directive in the PR body
-          milestone=$(printf '%s' "$PR_BODY" | tr -d '\r' | sed -n 's|^/milestone[[:space:]][[:space:]]*||p' | \
+          # Drop HTML comments first; directives inside them are not visible on the PR.
+          milestone=$(printf '%s' "$PR_BODY" | tr -d '\r' | perl -0777 -pe 's/<!--.*?-->//gs' | sed -n 's|^/milestone[[:space:]][[:space:]]*||p' | \
              sed 's|[[:space:]]*$||' | sed '/^$/d' | tail -n 1)
           [ -z "$milestone" ] && exit 0
           gh pr edit "$PR_NUMBER" --repo "$REPO" --milestone "$milestone" || \
