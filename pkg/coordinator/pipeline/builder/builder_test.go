@@ -194,6 +194,22 @@ func TestBuild_KVConnectorParams(t *testing.T) {
 			wantErr: "kv_connector_params",
 		},
 		{
+			name:     "max port accepted",
+			yaml:     "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params:\n    bootstrap_port: 65535\n" + prefillDecode,
+			wantPort: 65535,
+		},
+		{
+			name:     "empty kv_connector_params is the same as absent",
+			yaml:     "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params:\n" + prefillDecode,
+			env:      "9300",
+			wantPort: 9300,
+		},
+		{
+			name:    "negative port rejected",
+			yaml:    "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params:\n    bootstrap_port: -1\n" + prefillDecode,
+			wantErr: "kv_connector_params",
+		},
+		{
 			name:    "port above range rejected",
 			yaml:    "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params:\n    bootstrap_port: 65536\n" + prefillDecode,
 			wantErr: "kv_connector_params",

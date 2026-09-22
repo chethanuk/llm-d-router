@@ -316,7 +316,7 @@ pipeline:
       #   use_openai_format: true   # see notes above
       #   ec_connector: ec-nixl     # overrides pipeline.ec_connector
       #   kv_connector: kv-nixl     # overrides pipeline.kv_connector
-      #   kv_connector_params:      # overrides pipeline.kv_connector_params
+      #   kv_connector_params:      # overrides pipeline.kv_connector_params (kv-sglang only)
       #     bootstrap_port: 9100
 
     # -------------------------------------------------------------------

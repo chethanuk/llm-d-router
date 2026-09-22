@@ -642,7 +642,7 @@ prefill or decode bodies obtains a connector by name in its factory and calls th
 connector interface during `Execute`:
 
 ```go
-kvConn, err := kv.Build(kvName) // kvName from params[ParamKVConnector]
+kvConn, err := kv.Build(kvName, kvParams) // from params[ParamKVConnector], params[ParamKVConnectorParams]
 ecConn, err := ec.Build(ecName) // ecName from params[ParamECConnector]
 ```
 
