@@ -999,7 +999,7 @@ func (r *Runner) initAdmissionControl(
 
 	fc := fccontroller.NewFlowController(ctx, opts.PoolName, eppConfig.FlowControlConfig.Controller, deps)
 	return endpointCandidates,
-		requestcontrol.NewFlowControlAdmissionController(fc, opts.PoolName, endpointCandidates),
+		requestcontrol.NewFlowControlAdmissionController(fc, opts.PoolName, endpointCandidates, registry),
 		registry,
 		requestEvictor
 }

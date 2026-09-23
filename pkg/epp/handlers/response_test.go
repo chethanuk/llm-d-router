@@ -19,6 +19,7 @@ package handlers
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -564,6 +565,84 @@ func TestGenerateResponseHeaders_FlowQueueDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateResponseHeaders_FlowBandHeadroom(t *testing.T) {
+	server := &StreamingServer{}
+
+	tests := []struct {
+		name      string
+		sampler   func() (uint64, bool)
+		wantValue string
+		wantEmit  bool
+	}{
+		{
+			name:     "no sampler omits header",
+			sampler:  nil,
+			wantEmit: false,
+		},
+		{
+			name:     "sampler reporting no reading omits header",
+			sampler:  func() (uint64, bool) { return 0, false },
+			wantEmit: false,
+		},
+		{
+			name:      "headroom is emitted as a request count",
+			sampler:   func() (uint64, bool) { return 70, true },
+			wantValue: "70",
+			wantEmit:  true,
+		},
+		{
+			name:      "a full band emits zero rather than omitting",
+			sampler:   func() (uint64, bool) { return 0, true },
+			wantValue: "0",
+			wantEmit:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			reqCtx := &RequestContext{
+				FlowBandHeadroomRequests: tc.sampler,
+				Response:                 &Response{Headers: map[string]string{}},
+			}
+
+			gotHeaders := make(map[string]string)
+			for _, h := range server.generateResponseHeaders(reqCtx) {
+				gotHeaders[h.Header.Key] = string(h.Header.RawValue)
+			}
+
+			if tc.wantEmit {
+				assert.Equal(t, tc.wantValue, gotHeaders[metadata.FlowBandHeadroomRequestsHeaderKey])
+			} else {
+				assert.NotContains(t, gotHeaders, metadata.FlowBandHeadroomRequestsHeaderKey)
+			}
+		})
+	}
+}
+
+// The contract reads headroom at the response-headers phase so a consumer can act on it without a
+// staleness guard. Sampling once per emission is what makes that true; a value hoisted to admission
+// time would satisfy every other case above and still break the contract.
+func TestGenerateResponseHeaders_FlowBandHeadroomSampledAtEmit(t *testing.T) {
+	server := &StreamingServer{}
+	var calls uint64
+	reqCtx := &RequestContext{
+		FlowBandHeadroomRequests: func() (uint64, bool) {
+			calls++
+			return calls, true
+		},
+		Response: &Response{Headers: map[string]string{}},
+	}
+
+	for want := uint64(1); want <= 2; want++ {
+		gotHeaders := make(map[string]string)
+		for _, h := range server.generateResponseHeaders(reqCtx) {
+			gotHeaders[h.Header.Key] = string(h.Header.RawValue)
+		}
+		assert.Equal(t, strconv.FormatUint(want, 10), gotHeaders[metadata.FlowBandHeadroomRequestsHeaderKey])
+	}
+	assert.Equal(t, uint64(2), calls)
 }
 
 func TestRewriteModelName(t *testing.T) {
