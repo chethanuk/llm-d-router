@@ -719,10 +719,12 @@ connector. They must agree with the connector configured on the vLLM pods.
 
 KV and EC are independent: `ec-nixl` can pair with `kv-shared-storage`, and so on. A
 single step may override the default in its own `params` (`kv_connector:` /
-`kv_connector_params:` / `ec_connector:`), which is rarely needed. A step that sets its
-own `kv_connector` does not inherit `pipeline.kv_connector_params`, and a step's
-`kv_connector_params` replaces the pipeline map as a whole. An unknown key fails
-pipeline construction.
+`kv_connector_params:` / `ec_connector:`), which is rarely needed. A step inherits
+`pipeline.kv_connector_params` only when it sets no `kv_connector_params` of its own and
+its `kv_connector` is unset or matches `pipeline.kv_connector`; a step that names a
+different connector does not inherit them. A step's `kv_connector_params` replaces the
+pipeline map as a whole. An unknown key fails pipeline construction when the pipeline
+has a `prefill` or `decode` step, since those steps build the connector.
 
 ### Should the coordinator use the tokens-in format?
 

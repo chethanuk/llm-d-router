@@ -173,7 +173,23 @@ func TestBuild_KVConnectorParams(t *testing.T) {
 			wantPort: 8998,
 		},
 		{
-			name: "step with its own connector does not inherit pipeline params",
+			name: "step repeating the pipeline connector inherits pipeline params",
+			yaml: `pipeline:
+  kv_connector: kv-sglang
+  kv_connector_params:
+    bootstrap_port: 9100
+  steps:
+    - type: prefill
+      params:
+        kv_connector: kv-sglang
+    - type: decode
+      params:
+        kv_connector: kv-sglang
+`,
+			wantPort: 9100,
+		},
+		{
+			name: "step with a different connector does not inherit pipeline params",
 			yaml: `pipeline:
   kv_connector: kv-sglang
   kv_connector_params:
@@ -199,8 +215,14 @@ func TestBuild_KVConnectorParams(t *testing.T) {
 			wantPort: 65535,
 		},
 		{
-			name:     "empty kv_connector_params is the same as absent",
+			name:     "null kv_connector_params is the same as absent",
 			yaml:     "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params:\n" + prefillDecode,
+			env:      "9300",
+			wantPort: 9300,
+		},
+		{
+			name:     "empty map kv_connector_params is the same as absent",
+			yaml:     "pipeline:\n  kv_connector: kv-sglang\n  kv_connector_params: {}\n" + prefillDecode,
 			env:      "9300",
 			wantPort: 9300,
 		},
