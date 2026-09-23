@@ -43,6 +43,7 @@ var mmTypes = map[string]bool{
 	"audio_url":   true,
 	"video_url":   true,
 	"input_audio": true,
+	"input_image": true,
 }
 
 // truncateLongStrings recursively shortens long string values for logging.
@@ -70,46 +71,64 @@ func truncateLongStrings(v any, maxLen int) any {
 	}
 }
 
-// extractMMItems extracts all multimodal items from the request messages.
-func extractMMItems(logger logr.Logger, requestData map[string]any) []map[string]any {
+func collectMMItems(logger logr.Logger, rawMessages []json.RawMessage) []map[string]any {
 	var items []map[string]any
-
-	messages, err := requestMessages(requestData)
-	if err != nil {
-		logger.V(logging.DEBUG).Info("cannot read request messages for multimodal extraction", "error", err)
-		return items
-	}
-
-	for _, msg := range messages {
+	for _, msg := range rawMessages {
 		var msgMap map[string]any
 		if err := json.Unmarshal(msg, &msgMap); err != nil {
 			continue
 		}
-
 		content := msgMap["content"]
 		contentList, ok := content.([]any)
 		if !ok {
 			continue
 		}
-
 		for _, item := range contentList {
 			itemMap, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
-
 			itemType, ok := itemMap["type"].(string)
 			if !ok {
 				continue
 			}
-
 			if mmTypes[itemType] {
 				items = append(items, itemMap)
 			}
 		}
 	}
-
 	return items
+}
+
+// extractMMItems extracts all multimodal items from the request messages.
+func extractMMItems(logger logr.Logger, requestData map[string]any) []map[string]any {
+	messages, err := requestMessages(requestData)
+	if err != nil {
+		logger.V(logging.DEBUG).Info("cannot read request messages for multimodal extraction", "error", err)
+		return nil
+	}
+	return collectMMItems(logger, messages)
+}
+
+func extractMMItemsForAPI(apiType reqcommon.APIType, requestData map[string]any, logger logr.Logger) []map[string]any {
+	switch apiType {
+	case reqcommon.APITypeResponses:
+		parts, err := requestInputParts(requestData)
+		if err != nil {
+			logger.V(logging.DEBUG).Info("cannot read request input for multimodal extraction", "error", err)
+			return nil
+		}
+		return collectMMItems(logger, parts)
+	case reqcommon.APITypeGenerate, reqcommon.APITypeCompletions:
+		return nil
+	default:
+		messages, err := requestMessages(requestData)
+		if err != nil {
+			logger.V(logging.DEBUG).Info("cannot read request messages for multimodal extraction", "error", err)
+			return nil
+		}
+		return collectMMItems(logger, messages)
+	}
 }
 
 // buildEncoderRequest creates a per-item encoder request: a one-level copy of
@@ -128,9 +147,8 @@ func buildEncoderRequest(originalRequest map[string]any, mmItem map[string]any) 
 	}
 
 	encoderRequest["messages"] = messages
-	// The encoder request carries the item in messages and is sent to
-	// reqcommon.PathChatCompletions whatever API the client used (#2742), so it
-	// is capped as chat completions.
+	// Encoder wire format stays chat-shaped (messages) even for Responses;
+	// the request is always sent to reqcommon.PathChatCompletions.
 	reqcommon.CapSingleToken(encoderRequest, reqcommon.APITypeChatCompletions)
 
 	return encoderRequest
@@ -147,6 +165,17 @@ func mmItemURL(item map[string]any) string {
 				return u
 			}
 		}
+	case "input_image":
+		if v, ok := item["image_url"]; ok {
+			switch x := v.(type) {
+			case string:
+				return x
+			case map[string]any:
+				if u, ok := x["url"].(string); ok {
+					return u
+				}
+			}
+		}
 	}
 	return ""
 }
@@ -156,8 +185,8 @@ func mmItemURL(item map[string]any) string {
 // items (e.g. inline input_audio) are kept verbatim. Returns nil when
 // there is no multimodal content. The caller should skip the encoder
 // stage in that case.
-func (s *Server) mmItemsForFanout(originalRequest map[string]any, requestID string) []map[string]any {
-	raw := extractMMItems(s.logger, originalRequest)
+func (s *Server) mmItemsForFanout(apiType reqcommon.APIType, originalRequest map[string]any, requestID string) []map[string]any {
+	raw := extractMMItemsForAPI(apiType, originalRequest, s.logger)
 	if len(raw) == 0 {
 		return nil
 	}

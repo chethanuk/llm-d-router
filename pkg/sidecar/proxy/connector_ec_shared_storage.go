@@ -30,8 +30,8 @@ import (
 // item, discarding the responses (status check only). Used by the
 // `ec-example` connector to prime the encoder cache before forwarding the
 // original request to the P/D connector.
-func (s *Server) fanoutEncoderPrimer(ctx context.Context, originalRequest map[string]any, encoderHostPorts []string, requestID string) error {
-	items := s.mmItemsForFanout(originalRequest, requestID)
+func (s *Server) fanoutEncoderPrimer(ctx context.Context, originalRequest map[string]any, encoderHostPorts []string, requestID string, apiType reqcommon.APIType) error {
+	items := s.mmItemsForFanout(apiType, originalRequest, requestID)
 	if len(items) == 0 {
 		s.logger.V(logging.DEBUG).Info("no multimodal items, skipping encoder", "requestID", requestID)
 		return nil
@@ -58,9 +58,10 @@ func (s *Server) handleECSharedStorage(w http.ResponseWriter, r *http.Request, p
 	}
 	requestID := reqUUID.String()
 
-	// Step 1: Process through Encoder cluster (if has MM input)
-	if len(encodeEndPoints) > 0 {
-		if err := s.fanoutEncoderPrimer(r.Context(), body, encodeEndPoints, requestID); err != nil {
+	if apiType == reqcommon.APITypeGenerate && len(encodeEndPoints) > 0 {
+		s.logger.Info("encoder disaggregation not supported for generate", "requestID", requestID)
+	} else if len(encodeEndPoints) > 0 {
+		if err := s.fanoutEncoderPrimer(r.Context(), body, encodeEndPoints, requestID, apiType); err != nil {
 			s.logger.Error(err, "encoder processing failed", "requestID", requestID)
 			if err := errorBadGateway(err, w); err != nil {
 				s.logger.Error(err, "failed to send error response to client")

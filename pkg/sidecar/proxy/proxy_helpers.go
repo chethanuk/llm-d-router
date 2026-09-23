@@ -247,6 +247,91 @@ func requestMessages(req map[string]any) ([]json.RawMessage, error) {
 	}
 }
 
+func requestInputParts(req map[string]any) ([]json.RawMessage, error) {
+	switch v := req[requestFieldInput].(type) {
+	case nil:
+		return nil, nil
+	case string:
+		return nil, nil
+	case []string:
+		return nil, nil
+	case []any:
+		parts := make([]json.RawMessage, 0, len(v))
+		for _, elem := range v {
+			switch elem.(type) {
+			case string:
+				continue
+			default:
+				raw, err := json.Marshal(elem)
+				if err != nil {
+					continue
+				}
+				var obj map[string]any
+				if err := json.Unmarshal(raw, &obj); err != nil {
+					continue
+				}
+				parts = append(parts, json.RawMessage(raw))
+			}
+		}
+		return parts, nil
+	case []json.RawMessage:
+		parts := make([]json.RawMessage, 0, len(v))
+		for _, raw := range v {
+			var s string
+			if err := json.Unmarshal(raw, &s); err == nil {
+				continue
+			}
+			var arr []string
+			if err := json.Unmarshal(raw, &arr); err == nil {
+				continue
+			}
+			var obj map[string]any
+			if err := json.Unmarshal(raw, &obj); err == nil {
+				parts = append(parts, raw)
+				continue
+			}
+		}
+		return parts, nil
+	case json.RawMessage:
+		var s string
+		if err := json.Unmarshal(v, &s); err == nil {
+			return nil, nil
+		}
+		var arr []string
+		if err := json.Unmarshal(v, &arr); err == nil {
+			return nil, nil
+		}
+		var arrAny []any
+		if err := json.Unmarshal(v, &arrAny); err == nil {
+			parts := make([]json.RawMessage, 0, len(arrAny))
+			for _, elem := range arrAny {
+				switch elem.(type) {
+				case string:
+					continue
+				default:
+					raw, err := json.Marshal(elem)
+					if err != nil {
+						continue
+					}
+					var obj map[string]any
+					if err := json.Unmarshal(raw, &obj); err != nil {
+						continue
+					}
+					parts = append(parts, json.RawMessage(raw))
+				}
+			}
+			return parts, nil
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(v, &obj); err == nil {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("input is %T, want a string or array", v)
+	default:
+		return nil, fmt.Errorf("input is %T, want a string or array", v)
+	}
+}
+
 // decodeRequestBody parses a JSON object body, applying inspectedRequestFields.
 func decodeRequestBody(raw []byte) (map[string]any, error) {
 	var fields map[string]json.RawMessage
