@@ -272,6 +272,9 @@ DataProducer:
 - When a plugin needs data from a producer but none is configured, the default producer for that data
   is created automatically. Defaults: `token-producer`, `approx-prefix-cache-producer`,
   `mm-embeddings-cache-producer`, `inflight-load-producer`, `predicted-latency-producer`, `session-id-producer`.
+  Creation is transitive, since an auto-created producer can itself require a data key with a default,
+  and is bounded by the number of distinct default producers. Startup fails if a required data key is
+  still unproduced when creation stops.
 
 ### Available plugins
 
