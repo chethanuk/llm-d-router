@@ -57,7 +57,11 @@ func NewDecodeStep(gwClient *gateway.Client, params map[string]any) (pipeline.St
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	kvConn, err := kv.Build(kvName)
+	kvParams, err := paramMap(params, ParamKVConnectorParams)
+	if err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	kvConn, err := kv.Build(kvName, kvParams)
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
