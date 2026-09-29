@@ -275,7 +275,7 @@ func TestRequestBuilders(t *testing.T) {
 				payload := got[1].GetRequestBody().GetBody()
 				require.Greater(t, len(payload), 5, "gRPC framing prefix plus a message")
 				assert.Equal(t, byte(0), payload[0], "uncompressed flag")
-				assert.Equal(t, uint32(len(payload)-5), binary.BigEndian.Uint32(payload[1:5]))
+				assert.Equal(t, uint32(len(payload)-5), binary.BigEndian.Uint32(payload[1:5])) //nolint:gosec // G115: test payloads are far below MaxUint32
 
 				if tc.methodName == GenerateGRPCMethodName {
 					msg := &pb.GenerateRequest{}
@@ -333,7 +333,7 @@ func TestRequestBuilders(t *testing.T) {
 		require.NoError(t, err)
 		require.Greater(t, len(payload), 5)
 		assert.Equal(t, byte(0), payload[0])
-		assert.Equal(t, uint32(len(payload)-5), binary.BigEndian.Uint32(payload[1:5]))
+		assert.Equal(t, uint32(len(payload)-5), binary.BigEndian.Uint32(payload[1:5])) //nolint:gosec // G115: test payloads are far below MaxUint32
 	})
 
 	t.Run("GenerateRequestMetadata", func(t *testing.T) {
