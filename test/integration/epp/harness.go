@@ -135,7 +135,7 @@ func Run(m *testing.M) int {
 
 // moduleDir returns the on-disk directory of a module in the build list.
 func moduleDir(path string) string {
-	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", path).Output()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", path).Output() //nolint:gosec // G204: fixed go binary, module path is a compile-time constant
 	if err != nil {
 		// go list reports the actual reason on stderr, which ExitError carries.
 		var exitErr *exec.ExitError
@@ -156,7 +156,7 @@ func moduleDir(path string) string {
 // loadBaseResources parses the YAML manifest once at startup.
 func loadBaseResources() []*unstructured.Unstructured {
 	path := filepath.Join(repoRootPath, "test", "testdata", "inferencepool-with-model-hermetic.yaml")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is under the repo root
 	if err != nil {
 		panic(fmt.Sprintf("failed to read manifest %s: %v", path, err))
 	}
