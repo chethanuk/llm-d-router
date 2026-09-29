@@ -16,7 +16,6 @@ limitations under the License.
 */
 
 // Package gaie provides builders for GAIE and apix inference CRDs used in tests.
-// It imports GAIE/apix API types and pkg/common/routing only, never pkg/epp.
 package gaie
 
 import (

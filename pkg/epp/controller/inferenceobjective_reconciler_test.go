@@ -79,7 +79,7 @@ var (
 			CreationTimestamp(metav1.Unix(1000, 0)).
 			PoolName(inferencePool.Name).
 			PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	infObjective2Defaulted = testutil.MakeInferenceObjective(infObjective2.Name).
+	infObjective2Defaulted = fwkgaie.MakeInferenceObjective(infObjective2.Name).
 				Namespace(infObjective2.Namespace).
 				Priority(int32(0)).
 				CreationTimestamp(metav1.Unix(1000, 0)).
