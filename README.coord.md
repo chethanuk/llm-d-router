@@ -146,3 +146,4 @@ kubectl --context kind-e2e-coordinator-tests get pods
 | `K8S_CONTEXT` | _(empty)_ | Use an existing cluster context instead of creating a Kind cluster |
 | `READY_TIMEOUT` | `10m` | How long to wait for resources to become ready |
 | `E2E_EPP_TOPOLOGY` | `single` | EPP topology: `single` (one EPP + one pool) or `3epp` (per-role EPP + pool). `test-e2e-coordinator-3epp` sets `3epp` |
+| `E2E_GATEWAY` | `envoy` | Gateway in front of the coordinator and EPP: `envoy` or `agentgateway`. `agentgateway` supports only the `single` topology |

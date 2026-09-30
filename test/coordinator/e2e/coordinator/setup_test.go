@@ -57,7 +57,7 @@ func setupNameSpace() {
 }
 
 // setupInfra installs the base infra shared across tests: Gateway API + GIE
-// CRDs and Envoy. Runs only on suite-owned kind clusters; with K8S_CONTEXT set
+// CRDs and the gateway. Runs only on suite-owned kind clusters; with K8S_CONTEXT set
 // the caller is responsible for having base infra in place. The per-test
 // workload (EPPs, InferencePools, vLLM workers, coordinator) is created in the
 // test body; the EPP's RBAC/ServiceAccount/Service come from createStableInfra.
@@ -69,6 +69,11 @@ func setupInfra() {
 	infraSubs := map[string]string{
 		"${NAMESPACE}": nsName,
 		"${EPP_NAME}":  eppName,
+	}
+	if gatewayKind == gatewayAgentgateway {
+		ginkgo.By("Applying agentgateway from " + agentgatewayManifest)
+		applyManifest(agentgatewayManifest, infraSubs)
+		return
 	}
 	if threeEPP {
 		manifest = envoy3EPPManifest
@@ -127,6 +132,9 @@ func createOneEndPointPicker(e roleEPP) []string {
 	if threeEPP {
 		docs = renameEPPConfigVolume(docs, cmName)
 	}
+	if gatewayKind == gatewayAgentgateway {
+		docs = disableEPPSecureServing(docs)
+	}
 	objects = append(objects, testutils.CreateObjsFromYaml(testConfig, docs, getNamespace())...)
 	podsInDeploymentsReady(objects)
 	return objects
@@ -149,6 +157,22 @@ func renameEPPConfigVolume(docs []string, cmName string) []string {
 	}
 	gomega.Expect(matches).To(gomega.Equal(3),
 		"expected 3 %q references (volume, volumeMount, configMap) in the EPP Deployment; the shared manifest format may have changed", oldRef)
+	return out
+}
+
+// disableEPPSecureServing adds --secure-serving=false to the EPP args:
+// agentgateway speaks plaintext gRPC to the EPP. The match count is asserted
+// for the same reason as in renameEPPConfigVolume.
+func disableEPPSecureServing(docs []string) []string {
+	const anchor = "        - --allow-experimental-plugins=true\n"
+	out := make([]string, len(docs))
+	matches := 0
+	for i, d := range docs {
+		matches += strings.Count(d, anchor)
+		out[i] = strings.ReplaceAll(d, anchor, anchor+"        - --secure-serving=false\n")
+	}
+	gomega.Expect(matches).To(gomega.Equal(1),
+		"expected 1 %q arg in the EPP Deployment; the shared manifest format may have changed", anchor)
 	return out
 }
 
@@ -226,6 +250,7 @@ func createCoordinator(config string) []string {
 	coordinatorYAML := e2eutil.SubstituteMany([]string{config}, map[string]string{
 		"${NAMESPACE}":        nsName,
 		"${VLLM_RENDER_PORT}": vllmRenderPort,
+		"${GATEWAY_SERVICE}":  gatewayKind,
 	})[0]
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -254,7 +279,7 @@ func createCoordinator(config string) []string {
 	return objects
 }
 
-// waitForCoordinatorReady polls /readyz through Envoy until it returns 200,
+// waitForCoordinatorReady polls /readyz through the gateway until it returns 200,
 // confirming the freshly recreated coordinator pod is reachable through the
 // gateway before the test sends its request. The gateway Service is stable
 // across specs (see createStableInfra), so this waits only for the new pod to
