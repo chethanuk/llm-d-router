@@ -30,6 +30,15 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/coordinator/pipeline"
 )
 
+const (
+	keyOrderBlockID  = "block_id"
+	keyOrderTokenIDs = "token_ids"
+	keyOrderKVParams = "kv_transfer_params"
+	keyOrderChoices  = "choices"
+	keyOrderMessage  = "message"
+	keyOrderContent  = "content"
+)
+
 // keyOrderTools has properties in non-alphabetical order (zeta before alpha).
 const keyOrderTools = `[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"string"}}}}}]`
 
@@ -53,7 +62,7 @@ func TestSteps_PreserveClientNestedKeyOrder(t *testing.T) {
 				}
 				return step.Execute(context.Background(), &pipeline.RequestContext{
 					RequestID: "r", OriginalPath: reqcommon.PathChatCompletions, Model: "m",
-					KVTransferParams: map[string]any{"block_id": "b"},
+					KVTransferParams: map[string]any{keyOrderBlockID: "b"},
 					OriginalBody:     original, Body: parsed, ResponseWriter: httptest.NewRecorder(),
 				})
 			},
@@ -111,9 +120,9 @@ func TestSteps_PreserveClientNestedKeyOrder(t *testing.T) {
 				_ = json.Unmarshal(body, &got)
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(map[string]any{
-					"token_ids":          []int{1, 2},
-					"kv_transfer_params": map[string]any{"block_id": "b"},
-					"choices":            []map[string]any{{"message": map[string]any{"content": "ok"}}},
+					keyOrderTokenIDs: []int{1, 2},
+					keyOrderKVParams: map[string]any{keyOrderBlockID: "b"},
+					keyOrderChoices:  []map[string]any{{keyOrderMessage: map[string]any{keyOrderContent: "ok"}}},
 				})
 			}))
 			defer server.Close()
