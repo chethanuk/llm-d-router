@@ -18,8 +18,9 @@ limitations under the License.
 // against the e-p-d-pools topology: a single InferencePool covering the
 // encode, prefill, and decode worker pods, served by one EPP that runs the
 // scheduling profile named by each request's EPP-Profile header, behind a
-// hand-rolled standalone Envoy routing on that same header, and the
-// coordinator deployed as a pod. No Istio, no Gateway/HTTPRoute CRDs.
+// standalone gateway routing on that same header, and the coordinator deployed
+// as a pod. The gateway is a hand-rolled Envoy, or agentgateway with
+// E2E_GATEWAY=agentgateway. No Istio, no Gateway/HTTPRoute CRDs.
 package coordinate2e
 
 import (
@@ -69,7 +70,7 @@ const (
 
 	// EPP resources are the shared inference-gateway component's split files.
 	// Gateway/HTTPRoute manifests in that component are unused: the coordinator
-	// e2e fronts the EPP with a hand-rolled Envoy, matching the router e2e.
+	// e2e fronts the EPP with a standalone gateway (see gatewayKind).
 	eppManifest               = "../../../../deploy/components/inference-gateway/deployment.yaml"
 	poolManifest              = "../../../../deploy/components/inference-gateway/inference-pools.yaml"
 	eppRbacManifest           = "../../../../deploy/components/inference-gateway/rbac.yaml"
@@ -92,7 +93,15 @@ const (
 	envoy3EPPManifest = "../../../../deploy/environments/dev/coordinator-e2e-infra/envoy-3-epp.yaml"
 	pool3EPPManifest  = "../../../../deploy/environments/dev/coordinator-e2e-infra/inference-pools-3-epp.yaml"
 
+	// agentgatewayManifest holds the agentgateway ConfigMap, Deployment and
+	// Service used instead of the Envoy manifests when E2E_GATEWAY=agentgateway.
+	agentgatewayManifest = "../../../../deploy/environments/dev/coordinator-e2e-infra/agentgateway.yaml"
+
 	crdGIEPath = "../../../../deploy/components/crds-gie"
+
+	// E2E_GATEWAY values; each is also the gateway's Service name.
+	gatewayEnvoy        = "envoy"
+	gatewayAgentgateway = "agentgateway"
 )
 
 var (
@@ -107,6 +116,9 @@ var (
 	// phase) instead of the default single-EPP topology. See envoy3EPPManifest and
 	// the eppConfigLeastBusy (encode, decode) and eppConfigPrefill configs.
 	threeEPP = env.GetEnvString("E2E_EPP_TOPOLOGY", "single", ginkgo.GinkgoLogr) == "3epp"
+
+	// gatewayKind selects the gateway in front of the coordinator and EPP.
+	gatewayKind = env.GetEnvString("E2E_GATEWAY", gatewayEnvoy, ginkgo.GinkgoLogr)
 
 	containerRuntime = env.GetEnvString("CONTAINER_RUNTIME", "docker", ginkgo.GinkgoLogr)
 	eppImage         = env.GetEnvString("EPP_IMAGE", "ghcr.io/llm-d/llm-d-router-endpoint-picker:dev", ginkgo.GinkgoLogr)
@@ -170,6 +182,9 @@ func TestCoordinatorE2E(t *testing.T) {
 }
 
 var _ = ginkgo.BeforeSuite(func() {
+	gomega.Expect(gatewayKind).To(gomega.BeElementOf(gatewayEnvoy, gatewayAgentgateway), "E2E_GATEWAY")
+	gomega.Expect(threeEPP && gatewayKind == gatewayAgentgateway).To(gomega.BeFalse(),
+		"the 3-EPP per-role check parses Envoy access logs; run E2E_EPP_TOPOLOGY=3epp with E2E_GATEWAY=envoy")
 	gomega.Expect(coordinatorImage).NotTo(gomega.BeEmpty(), "COORDINATOR_IMAGE must be set")
 
 	testutils.RequireParallelProcessesMatch(numProcesses)
@@ -181,15 +196,15 @@ var _ = ginkgo.BeforeSuite(func() {
 	setupK8sClient()
 	setupNameSpace()
 
-	// Base infra (CRDs, RBAC, Envoy) is created here on suite-owned kind clusters.
+	// Base infra (CRDs, RBAC, gateway) is created here on suite-owned kind clusters.
 	// With K8S_CONTEXT set, base infra is assumed pre-deployed; the per-test
 	// workload (EPPs, pools, vLLM workers, coordinator) is created in the test body.
 	if k8sContext == "" {
 		setupInfra()
 	} else {
-		// Base infra (including Envoy) is pre-deployed; forward the gateway so
+		// Base infra (including the gateway) is pre-deployed; forward the gateway so
 		// the test can post to it. The kind nodePort mapping is unavailable here.
-		startPortForward("service/envoy", strconv.Itoa(getGatewayPort()), "8081")
+		startPortForward("service/"+gatewayKind, strconv.Itoa(getGatewayPort()), "8081")
 	}
 
 	rendererObjects = createRenderer()
@@ -323,7 +338,7 @@ func setupK8sClient() {
 	k8slog.SetLogger(ginkgo.GinkgoLogr)
 }
 
-// getGatewayPort returns the envoy gateway's NodePort for this process. See testutils.ProcessPort.
+// getGatewayPort returns the gateway's NodePort for this process. See testutils.ProcessPort.
 func getGatewayPort() int {
 	return testutils.ProcessPort(baseGatewayPort)
 }
