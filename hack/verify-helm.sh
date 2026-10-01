@@ -281,6 +281,36 @@ for chart in llm-d-router-gateway llm-d-router-standalone; do
   echo "Leader-election RBAC checks passed for ${chart}."
 done
 
+echo "Verifying metrics authentication RBAC..."
+verify_metrics_auth_rbac() {
+  local chart="$1" tokenreviews="$2" metrics_rule="$3"
+  shift 3
+  local output="${TEMP_DIR}/${chart}-metrics-auth-rbac.yaml"
+  if ! "${HELM}" template metrics-auth "${SCRIPT_ROOT}/config/charts/${chart}" \
+    --set router.modelServers.matchLabels.app=llm-instance-gateway "$@" > "${output}"; then
+    echo "Metrics-auth rendering failed for ${chart}: $*"
+    exit 1
+  fi
+  local want pattern actual
+  for want in "${tokenreviews}:tokenreviews" "${tokenreviews}:subjectaccessreviews" "${metrics_rule}:- \"/metrics\""; do
+    pattern="${want#*:}"
+    if grep -Fq -- "${pattern}" "${output}"; then actual=true; else actual=false; fi
+    if [ "${actual}" != "${want%%:*}" ]; then
+      echo "${chart}: expected '${pattern}' present=${want%%:*}, got ${actual}; flags: $*"
+      exit 1
+    fi
+  done
+}
+for chart in llm-d-router-gateway llm-d-router-standalone; do
+  # auth.enabled defaults to true: the EPP authenticates /metrics, so it needs tokenreviews even when Prometheus is off.
+  verify_metrics_auth_rbac "${chart}" true false
+  verify_metrics_auth_rbac "${chart}" true true --set router.monitoring.prometheus.enabled=true
+  verify_metrics_auth_rbac "${chart}" true false --set router.monitoring.prometheus.enabled=true --set router.monitoring.provider.name=gmp
+  verify_metrics_auth_rbac "${chart}" false false --set router.monitoring.prometheus.auth.enabled=false
+  verify_metrics_auth_rbac "${chart}" false false --set router.monitoring.prometheus.enabled=true --set router.monitoring.prometheus.auth.enabled=false
+  echo "Metrics-auth RBAC checks passed for ${chart}."
+done
+
 echo "Running llm-d-router-standalone negative validation tests..."
 missing_endpoint_selector_command="${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.inferencePool.create=false --set router.modelServers.type=vllm --set 'router.modelServers.targetPorts[0].number=8000' >/dev/null"
 echo "Executing: ${missing_endpoint_selector_command}"
