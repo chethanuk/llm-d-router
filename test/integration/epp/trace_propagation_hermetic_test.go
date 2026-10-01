@@ -27,7 +27,7 @@ import (
 
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	"github.com/llm-d/llm-d-router/pkg/epp/metadata"
-	"github.com/llm-d/llm-d-router/test/integration"
+	fwkepp "github.com/llm-d/llm-d-router/test/framework/epp"
 )
 
 // TestTraceContextDownstreamPropagation verifies that EPP joins an upstream
@@ -53,7 +53,7 @@ func TestTraceContextDownstreamPropagation(t *testing.T) {
 		metadata.ModelNameRewriteKey: modelMyModelTarget,
 		"traceparent":                upstreamTraceparent,
 	}
-	requests := integration.ReqRaw(headers, string(body))
+	requests := fwkepp.ReqRaw(headers, string(body))
 
 	ctx := t.Context()
 	h := NewTestHarness(ctx, t, WithTracing(), WithStandardMode()).WithBaseResources()
@@ -63,7 +63,7 @@ func TestTraceContextDownstreamPropagation(t *testing.T) {
 		P(2, 10, 0.2),
 	}).WaitForSync(3, modelMyModel).WaitForReadyPodsMetric(3)
 
-	responses, err := integration.StreamedRequest(t, h.Client, requests, 2)
+	responses, err := fwkepp.StreamedRequest(t, h.Client, requests, 2)
 	require.NoError(t, err)
 	require.Len(t, responses, 2)
 
