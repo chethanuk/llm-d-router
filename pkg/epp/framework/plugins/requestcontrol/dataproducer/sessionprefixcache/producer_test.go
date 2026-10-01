@@ -38,6 +38,14 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/requestheader/agentidentity"
 )
 
+const (
+	roleUser          = "user"
+	roleAssistant     = "assistant"
+	keyPromptCacheKey = "prompt_cache_key"
+	keyConversation   = "conversation"
+	testModel         = "test-model"
+)
+
 // dataKey mirrors how a scorer binds this producer: the key must be derived from
 // the same ProducerType the factory is called with.
 var dataKey = attrprefix.PrefixCacheMatchInfoDataKey.WithNonEmptyProducerName(ProducerType)
@@ -66,17 +74,17 @@ func testEndpoint(name string) fwksched.Endpoint {
 func chatReq(id string, msgs ...string) *fwksched.InferenceRequest {
 	messages := make([]fwkrh.Message, len(msgs))
 	for i, m := range msgs {
-		messages[i] = fwkrh.Message{Role: "user", Content: fwkrh.Content{Raw: m}}
+		messages[i] = fwkrh.Message{Role: roleUser, Content: fwkrh.Content{Raw: m}}
 	}
 	body := &fwkrh.InferenceRequestBody{
 		ChatCompletions: &fwkrh.ChatCompletionsRequest{Messages: messages},
 	}
 	if id != "" {
-		body.Payload = fwkrh.PayloadMap{"prompt_cache_key": id}
+		body.Payload = fwkrh.PayloadMap{keyPromptCacheKey: id}
 	}
 	return &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body:        body,
 	}
 }
@@ -206,8 +214,8 @@ func TestChunk_RoleAndBoundaryFraming(t *testing.T) {
 	// Same concatenated text, but split across a user and an assistant message.
 	split := chatReq("sess")
 	split.Body.ChatCompletions.Messages = []fwkrh.Message{
-		{Role: "user", Content: fwkrh.Content{Raw: partA}},
-		{Role: "assistant", Content: fwkrh.Content{Raw: partB}},
+		{Role: roleUser, Content: fwkrh.Content{Raw: partA}},
+		{Role: roleAssistant, Content: fwkrh.Content{Raw: partB}},
 	}
 	require.NoError(t, p.Produce(context.Background(), split, eps))
 	require.Greater(t, matchInfo(t, ep).TotalBlocks(), 0)
@@ -221,17 +229,17 @@ func TestChunk_AnthropicSystemAndBodies(t *testing.T) {
 
 	withSystem := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body: &fwkrh.InferenceRequestBody{Messages: &fwkrh.MessagesRequest{
 			System:   fwkrh.AnthropicContent{Raw: bigText(700)},
-			Messages: []fwkrh.AnthropicMessage{{Role: "user", Content: fwkrh.AnthropicContent{Raw: "hi"}}},
+			Messages: []fwkrh.AnthropicMessage{{Role: roleUser, Content: fwkrh.AnthropicContent{Raw: "hi"}}},
 		}},
 	}
 	withoutSystem := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body: &fwkrh.InferenceRequestBody{Messages: &fwkrh.MessagesRequest{
-			Messages: []fwkrh.AnthropicMessage{{Role: "user", Content: fwkrh.AnthropicContent{Raw: "hi"}}},
+			Messages: []fwkrh.AnthropicMessage{{Role: roleUser, Content: fwkrh.AnthropicContent{Raw: "hi"}}},
 		}},
 	}
 	sysChain := chainOf(p, withSystem)
@@ -241,7 +249,7 @@ func TestChunk_AnthropicSystemAndBodies(t *testing.T) {
 
 	responses := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body:        &fwkrh.InferenceRequestBody{Responses: &fwkrh.ResponsesRequest{Input: bigText(700)}},
 	}
 	responsesChain := chainOf(p, responses)
@@ -249,9 +257,9 @@ func TestChunk_AnthropicSystemAndBodies(t *testing.T) {
 
 	conversations := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body: &fwkrh.InferenceRequestBody{Conversations: &fwkrh.ConversationsRequest{
-			Items: []fwkrh.ConversationItem{{Type: "message", Role: "user", Content: bigText(700)}},
+			Items: []fwkrh.ConversationItem{{Type: "message", Role: roleUser, Content: bigText(700)}},
 		}},
 	}
 	chain := chainOf(p, conversations)
@@ -274,9 +282,9 @@ func TestIdentity_DeclaredIdsDoNotAffectIdentity(t *testing.T) {
 		agentID string
 	}{
 		{name: "no declaration"},
-		{name: "body prompt_cache_key", payload: fwkrh.PayloadMap{"prompt_cache_key": "thread-1"}},
-		{name: "different prompt_cache_key", payload: fwkrh.PayloadMap{"prompt_cache_key": "thread-2"}},
-		{name: "conversation id", payload: fwkrh.PayloadMap{"conversation": "conv-1"}},
+		{name: "body prompt_cache_key", payload: fwkrh.PayloadMap{keyPromptCacheKey: "thread-1"}},
+		{name: "different prompt_cache_key", payload: fwkrh.PayloadMap{keyPromptCacheKey: "thread-2"}},
+		{name: "conversation id", payload: fwkrh.PayloadMap{keyConversation: "conv-1"}},
 		{name: "agent identity", agentID: "session-a"},
 		{name: "different agent identity", agentID: "session-b"},
 	}
@@ -525,11 +533,11 @@ func TestChunk_MaxChunksCapsTheChain(t *testing.T) {
 func responsesReq(session, input string) *fwksched.InferenceRequest {
 	body := &fwkrh.InferenceRequestBody{Responses: &fwkrh.ResponsesRequest{Input: input}}
 	if session != "" {
-		body.Payload = fwkrh.PayloadMap{"conversation": session}
+		body.Payload = fwkrh.PayloadMap{keyConversation: session}
 	}
 	return &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body:        body,
 	}
 }
@@ -657,7 +665,7 @@ func TestChunk_OpaqueContentBreaksFalseAffinity(t *testing.T) {
 		return &fwkrh.MessagesRequest{
 			System: fwkrh.AnthropicContent{Raw: bigText(700)},
 			Messages: []fwkrh.AnthropicMessage{{
-				Role: "assistant",
+				Role: roleAssistant,
 				Content: fwkrh.AnthropicContent{Structured: []fwkrh.AnthropicContentBlock{
 					{Type: "thinking", Thinking: strings.Repeat("t", 600)},
 					{Type: "tool_use", Name: "read_file", Input: json.RawMessage(`{"path":"` + strings.Repeat("p", 600) + `"}`)},
@@ -716,7 +724,7 @@ func TestChunk_OpaqueContentBreaksFalseAffinity(t *testing.T) {
 	req := func(m *fwkrh.MessagesRequest) *fwksched.InferenceRequest {
 		return &fwksched.InferenceRequest{
 			RequestID:   uuid.NewString(),
-			TargetModel: "test-model",
+			TargetModel: testModel,
 			Body:        &fwkrh.InferenceRequestBody{Messages: m},
 		}
 	}
@@ -764,7 +772,7 @@ func TestResponseBody_SkipsUnmeasurableSamples(t *testing.T) {
 			// not the number of bytes the engine tokenized.
 			name: "multimodal content is named, not carried",
 			body: &fwkrh.InferenceRequestBody{ChatCompletions: &fwkrh.ChatCompletionsRequest{
-				Messages: []fwkrh.Message{{Role: "user", Content: fwkrh.Content{Structured: []fwkrh.ContentBlock{
+				Messages: []fwkrh.Message{{Role: roleUser, Content: fwkrh.Content{Structured: []fwkrh.ContentBlock{
 					{Type: "text", Text: bigText(4096)},
 					{Type: "image_url", ImageURL: fwkrh.ImageBlock{URL: "https://example.test/a.png"}},
 				}}}},
@@ -780,7 +788,7 @@ func TestResponseBody_SkipsUnmeasurableSamples(t *testing.T) {
 
 			req := &fwksched.InferenceRequest{
 				RequestID:   uuid.NewString(),
-				TargetModel: "test-model",
+				TargetModel: testModel,
 				Body:        tc.body,
 			}
 			// A count this far below the byte length would move the ratio hard.
@@ -860,10 +868,10 @@ func TestAlias_ChangedPreambleStartsANewLineage(t *testing.T) {
 	turn := func(instructions, input string) *fwksched.InferenceRequest {
 		return &fwksched.InferenceRequest{
 			RequestID:   uuid.NewString(),
-			TargetModel: "test-model",
+			TargetModel: testModel,
 			Body: &fwkrh.InferenceRequestBody{
 				Responses: &fwkrh.ResponsesRequest{Instructions: instructions, Input: input},
-				Payload:   fwkrh.PayloadMap{"conversation": "conv-1"},
+				Payload:   fwkrh.PayloadMap{keyConversation: "conv-1"},
 			},
 		}
 	}
@@ -903,11 +911,11 @@ func TestChunk_SeparatorInContentCannotForgeAFrame(t *testing.T) {
 	// Two turns, framed by the producer.
 	twoTurns := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body: &fwkrh.InferenceRequestBody{ChatCompletions: &fwkrh.ChatCompletionsRequest{
 			Messages: []fwkrh.Message{
-				{Role: "user", Content: fwkrh.Content{Raw: a}},
-				{Role: "assistant", Content: fwkrh.Content{Raw: b}},
+				{Role: roleUser, Content: fwkrh.Content{Raw: a}},
+				{Role: roleAssistant, Content: fwkrh.Content{Raw: b}},
 			},
 		}},
 	}
@@ -915,10 +923,10 @@ func TestChunk_SeparatorInContentCannotForgeAFrame(t *testing.T) {
 	// One turn whose text spells out the frame the producer would have written.
 	forged := &fwksched.InferenceRequest{
 		RequestID:   uuid.NewString(),
-		TargetModel: "test-model",
+		TargetModel: testModel,
 		Body: &fwkrh.InferenceRequestBody{ChatCompletions: &fwkrh.ChatCompletionsRequest{
 			Messages: []fwkrh.Message{
-				{Role: "user", Content: fwkrh.Content{
+				{Role: roleUser, Content: fwkrh.Content{
 					Raw: a + "\x1fchat\x1fassistant\x1f" + b,
 				}},
 			},
@@ -938,14 +946,14 @@ func TestChunk_ToolUseIDIsFramed(t *testing.T) {
 	req := func(id string) *fwksched.InferenceRequest {
 		return &fwksched.InferenceRequest{
 			RequestID:   uuid.NewString(),
-			TargetModel: "test-model",
+			TargetModel: testModel,
 			Body: &fwkrh.InferenceRequestBody{Messages: &fwkrh.MessagesRequest{
 				Messages: []fwkrh.AnthropicMessage{
-					{Role: "user", Content: fwkrh.AnthropicContent{Raw: bigText(600)}},
-					{Role: "assistant", Content: fwkrh.AnthropicContent{Structured: []fwkrh.AnthropicContentBlock{
+					{Role: roleUser, Content: fwkrh.AnthropicContent{Raw: bigText(600)}},
+					{Role: roleAssistant, Content: fwkrh.AnthropicContent{Structured: []fwkrh.AnthropicContentBlock{
 						{Type: "tool_use", ID: id, Name: "get_weather", Input: []byte(`{"city":"SF"}`)},
 					}}},
-					{Role: "user", Content: fwkrh.AnthropicContent{Raw: bigText(600)}},
+					{Role: roleUser, Content: fwkrh.AnthropicContent{Raw: bigText(600)}},
 				},
 			}},
 		}
@@ -967,7 +975,7 @@ func TestAlias_AgentIdentityContinuesOneLineage(t *testing.T) {
 	turn := func(id, input string) *fwksched.InferenceRequest {
 		req := &fwksched.InferenceRequest{
 			RequestID:   uuid.NewString(),
-			TargetModel: "test-model",
+			TargetModel: testModel,
 			Body: &fwkrh.InferenceRequestBody{
 				Responses: &fwkrh.ResponsesRequest{Input: input},
 			},
@@ -1002,7 +1010,7 @@ func TestChunk_ToolSchemaChangeBreaksAffinity(t *testing.T) {
 	req := func(desc string) *fwksched.InferenceRequest {
 		return &fwksched.InferenceRequest{
 			RequestID:   uuid.NewString(),
-			TargetModel: "test-model",
+			TargetModel: testModel,
 			Body: &fwkrh.InferenceRequestBody{Messages: &fwkrh.MessagesRequest{
 				Tools: []fwkrh.AnthropicTool{{
 					Name:        "get_weather",
@@ -1010,7 +1018,7 @@ func TestChunk_ToolSchemaChangeBreaksAffinity(t *testing.T) {
 					InputSchema: []byte(`{"type":"object"}`),
 				}},
 				Messages: []fwkrh.AnthropicMessage{
-					{Role: "user", Content: fwkrh.AnthropicContent{Raw: bigText(900)}},
+					{Role: roleUser, Content: fwkrh.AnthropicContent{Raw: bigText(900)}},
 				},
 			}},
 		}
