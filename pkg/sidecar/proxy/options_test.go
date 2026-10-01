@@ -1405,9 +1405,57 @@ func TestCompleteTLSServingProfile(t *testing.T) {
 			expectedError: `below the TLS 1.2 minimum`,
 		},
 		{
+			name:               "VersionTLS12",
+			flags:              []string{"--tls-min-version=VersionTLS12"},
+			expectedMinVersion: tls.VersionTLS12,
+		},
+		{
+			name:          "TLS1.2 is not a version name",
+			flags:         []string{"--tls-min-version=TLS1.2"},
+			expectedError: "unknown TLS version",
+		},
+		{
+			name:          "lowercase versiontls12",
+			flags:         []string{"--tls-min-version=versiontls12"},
+			expectedError: "unknown TLS version",
+		},
+		{
+			name:                 "single cipher",
+			flags:                []string{"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"},
+			expectedCipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		},
+		{
+			name:                 "leading space cipher",
+			flags:                []string{"--tls-cipher-suites= TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"},
+			expectedCipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		},
+		{
+			name:  "space after comma",
+			flags: []string{"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"},
+			expectedCipherSuites: []uint16{
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			},
+		},
+		{
+			name:                 "trailing comma",
+			flags:                []string{"--tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,"},
+			expectedCipherSuites: []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		},
+		{
+			// Non-nil empty, distinct from unset (nil).
+			name:                 "only empty elements",
+			flags:                []string{"--tls-cipher-suites=,"},
+			expectedCipherSuites: []uint16{},
+		},
+		{
+			name:  "unset",
+			flags: []string{},
+		},
+		{
 			name:          "invalid cipher suite",
 			flags:         []string{"--tls-cipher-suites=FAKE_CIPHER_SUITE"},
-			expectedError: `invalid tls-cipher-suites: unknown cipher suite "FAKE_CIPHER_SUITE"`,
+			expectedError: `invalid tls-cipher-suites: Cipher suite FAKE_CIPHER_SUITE not supported or doesn't exist`,
 		},
 	}
 
@@ -1437,6 +1485,16 @@ func TestCompleteTLSServingProfileFromYAML(t *testing.T) {
 
 	require.NoError(t, opts.Complete())
 	require.Equal(t, uint16(tls.VersionTLS12), opts.TLSMinVersion)
+	require.Equal(t, []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, opts.TLSCipherSuites)
+}
+
+func TestCompleteTLSServingProfileFromYAMLSpacePadded(t *testing.T) {
+	opts, flagSet := newTestOptions(t)
+	require.NoError(t, flagSet.Parse([]string{
+		`--configuration={tls-cipher-suites: [" TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"]}`,
+	}))
+
+	require.NoError(t, opts.Complete())
 	require.Equal(t, []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}, opts.TLSCipherSuites)
 }
 
