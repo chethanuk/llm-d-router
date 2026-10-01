@@ -31,6 +31,7 @@ import (
 
 	errcommon "github.com/llm-d/llm-d-router/pkg/common/error"
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
+	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/contracts"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/contracts/mocks"
 	fctypes "github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/types"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
@@ -239,7 +240,7 @@ func TestFlowControlAdmissionController_RequestTTL(t *testing.T) {
 				Request:           &handlers.Request{Headers: headers, Metadata: map[string]any{}},
 			}
 			fc := &mockFlowController{outcome: fctypes.QueueOutcomeDispatched}
-			controller := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{})
+			controller := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{}, nil)
 
 			err := controller.Admit(ctx, reqCtx, 0)
 
@@ -400,7 +401,7 @@ func TestFlowControlAdmissionController_Admit(t *testing.T) {
 				},
 			}
 			fc := &mockFlowController{outcome: tc.fcOutcome, err: tc.fcErr}
-			ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{Candidates: tc.locatorPods})
+			ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{Candidates: tc.locatorPods}, nil)
 
 			err := ac.Admit(ctx, reqCtx, tc.priority)
 
@@ -436,7 +437,7 @@ func TestFlowControlAdmissionController_StampsQueueDuration(t *testing.T) {
 		t.Parallel()
 		reqCtx := newReqCtx()
 		fc := &mockFlowController{outcome: fctypes.QueueOutcomeDispatched, delay: 5 * time.Millisecond}
-		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{})
+		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{}, nil)
 
 		require.NoError(t, ac.Admit(ctx, reqCtx, 0))
 		assert.True(t, reqCtx.FlowControlAdmitted)
@@ -451,7 +452,7 @@ func TestFlowControlAdmissionController_StampsQueueDuration(t *testing.T) {
 			err:     fmt.Errorf("%w: %w", fctypes.ErrRejected, fctypes.ErrQueueAtCapacity),
 			delay:   5 * time.Millisecond,
 		}
-		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{})
+		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{}, nil)
 
 		require.Error(t, ac.Admit(ctx, reqCtx, 0))
 		assert.False(t, reqCtx.FlowControlAdmitted)
@@ -465,6 +466,126 @@ func TestFlowControlAdmissionController_StampsQueueDuration(t *testing.T) {
 
 		require.NoError(t, ac.Admit(ctx, reqCtx, 0))
 		assert.False(t, reqCtx.FlowControlAdmitted)
+	})
+}
+
+func TestFlowControlAdmissionController_BandHeadroom(t *testing.T) {
+	t.Parallel()
+	ctx := logutil.NewTestLoggerIntoContext(context.Background())
+
+	newReqCtx := func() *handlers.RequestContext {
+		return &handlers.RequestContext{
+			SchedulingRequest: &fwksched.InferenceRequest{RequestID: "test-req"},
+			Request:           &handlers.Request{Metadata: map[string]any{}},
+		}
+	}
+	bandOf := func(band contracts.CapacityDimension) *mocks.MockRegistryDataPlane {
+		return &mocks.MockRegistryDataPlane{
+			CapacitySnapshotFunc: func(int) (contracts.CapacitySnapshot, error) {
+				return contracts.CapacitySnapshot{Band: band}, nil
+			},
+		}
+	}
+
+	tests := []struct {
+		name         string
+		registry     bandCapacitySource
+		wantHeadroom uint64
+		wantOK       bool
+	}{
+		{
+			name:         "headroom is capacity minus length",
+			registry:     bandOf(contracts.CapacityDimension{Len: 30, CapacityRequests: 100}),
+			wantHeadroom: 70,
+			wantOK:       true,
+		},
+		{
+			name:         "a full band clamps to zero",
+			registry:     bandOf(contracts.CapacityDimension{Len: 100, CapacityRequests: 100}),
+			wantHeadroom: 0,
+			wantOK:       true,
+		},
+		{
+			// Regression: both operands are uint64, so a subtraction without the clamp wraps to
+			// 18446744073709551596 and advertises near-infinite headroom on an over-full band.
+			name:         "an over-capacity band clamps to zero rather than wrapping",
+			registry:     bandOf(contracts.CapacityDimension{Len: 120, CapacityRequests: 100}),
+			wantHeadroom: 0,
+			wantOK:       true,
+		},
+		{
+			name:     "a band with no configured request capacity reports no reading",
+			registry: bandOf(contracts.CapacityDimension{Len: 5}),
+			wantOK:   false,
+		},
+		{
+			name: "an unresolvable band reports no reading",
+			registry: &mocks.MockRegistryDataPlane{
+				CapacitySnapshotFunc: func(int) (contracts.CapacitySnapshot, error) {
+					return contracts.CapacitySnapshot{}, errors.New("band not found")
+				},
+			},
+			wantOK: false,
+		},
+		{
+			name:     "no registry wired reports no reading",
+			registry: nil,
+			wantOK:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reqCtx := newReqCtx()
+			fc := &mockFlowController{outcome: fctypes.QueueOutcomeDispatched}
+			ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{}, tc.registry)
+
+			require.NoError(t, ac.Admit(ctx, reqCtx, 0))
+			require.NotNil(t, reqCtx.FlowBandHeadroomRequests)
+
+			headroom, ok := reqCtx.FlowBandHeadroomRequests()
+			assert.Equal(t, tc.wantOK, ok)
+			if tc.wantOK {
+				assert.Equal(t, tc.wantHeadroom, headroom)
+			}
+		})
+	}
+
+	t.Run("a rejected request carries no sampler", func(t *testing.T) {
+		t.Parallel()
+		reqCtx := newReqCtx()
+		fc := &mockFlowController{
+			outcome: fctypes.QueueOutcomeRejectedCapacity,
+			err:     fmt.Errorf("%w: %w", fctypes.ErrRejected, fctypes.ErrQueueAtCapacity),
+		}
+		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{},
+			bandOf(contracts.CapacityDimension{Len: 30, CapacityRequests: 100}))
+
+		require.Error(t, ac.Admit(ctx, reqCtx, 0))
+		assert.Nil(t, reqCtx.FlowBandHeadroomRequests)
+	})
+
+	t.Run("the band sampled is the band the request was admitted to", func(t *testing.T) {
+		t.Parallel()
+		reqCtx := newReqCtx()
+		var got int
+		reg := &mocks.MockRegistryDataPlane{
+			CapacitySnapshotFunc: func(priority int) (contracts.CapacitySnapshot, error) {
+				got = priority
+				return contracts.CapacitySnapshot{
+					Band: contracts.CapacityDimension{Len: 1, CapacityRequests: 4},
+				}, nil
+			},
+		}
+		fc := &mockFlowController{outcome: fctypes.QueueOutcomeDispatched}
+		ac := NewFlowControlAdmissionController(fc, "pool", &mocks.MockEndpointCandidates{}, reg)
+
+		require.NoError(t, ac.Admit(ctx, reqCtx, 7))
+		headroom, ok := reqCtx.FlowBandHeadroomRequests()
+		require.True(t, ok)
+		assert.Equal(t, uint64(3), headroom)
+		assert.Equal(t, 7, got)
 	})
 }
 
