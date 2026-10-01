@@ -366,6 +366,8 @@ retryLoop:
 			}
 		}
 	}
+	// Decode behind a prefiller has no ECConnector; the prefill stage consumed the encoder cache.
+	delete(body, reqcommon.FieldECTransferParams)
 	body[reqcommon.FieldKVTransferParams] = pKVTransferParams
 
 	dbody, err := json.Marshal(body)
@@ -528,6 +530,8 @@ func (s *Server) runNIXLProtocolV2WriteParallel(
 	remoteHosts := s.currentRemoteHosts(parentCtx)
 
 	// Decode: one prefill host; leader bit for follower global ranks.
+	// Decode behind a prefiller has no ECConnector; the prefill stage consumed the encoder cache.
+	delete(body, reqcommon.FieldECTransferParams)
 	body[reqcommon.FieldKVTransferParams] = map[string]any{
 		reqcommon.FieldDoRemotePrefill: true,
 		reqcommon.FieldDoRemoteDecode:  false,
