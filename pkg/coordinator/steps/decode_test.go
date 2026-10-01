@@ -503,3 +503,77 @@ func TestDecodeStep_TransportError(t *testing.T) {
 		t.Fatalf("expected ErrorHandler-written 502, got %d", result.StatusCode)
 	}
 }
+
+// TestDecodeStep_PreservesClientKeyOrder verifies the upstream body keeps the
+// client's nested JSON key order for fields the coordinator did not modify
+// (llm-d-router#2621): re-marshaling a map[string]any would sort them.
+func TestDecodeStep_PreservesClientKeyOrder(t *testing.T) {
+	const tools = `[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"string"}}}}}]`
+
+	tests := []struct {
+		name      string
+		original  string
+		wantField string
+		wantRaw   string
+	}{
+		{
+			name:      "tools properties keep client order",
+			original:  `{"model":"m","messages":[{"role":"user","content":"hi"}],"tools":` + tools + `}`,
+			wantField: "tools",
+			wantRaw:   tools,
+		},
+		{
+			name:      "untouched messages keep client key order",
+			original:  `{"model":"m","messages":[{"role":"user","content":"hi"}]}`,
+			wantField: "messages",
+			wantRaw:   `[{"role":"user","content":"hi"}]`,
+		},
+		{
+			name:      "pretty-printed whitespace and escapes preserved",
+			original:  "{\"model\":\"m\",\"messages\":[],\"tools\": [ {\"b\":1,\n \"a\":\"\\u00e9\"} ]}",
+			wantField: "tools",
+			wantRaw:   "[ {\"b\":1,\n \"a\":\"\\u00e9\"} ]",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got map[string]json.RawMessage
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &got)
+				_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"message": map[string]any{"content": "ok"}}}})
+			}))
+			defer server.Close()
+
+			step, err := NewDecodeStep(gateway.New(config.GatewayConfig{Address: server.URL}), map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var parsed map[string]any
+			if err := json.Unmarshal([]byte(tc.original), &parsed); err != nil {
+				t.Fatal(err)
+			}
+			reqCtx := &pipeline.RequestContext{
+				RequestID:        "req-order",
+				OriginalPath:     reqcommon.PathChatCompletions,
+				Model:            "m",
+				KVTransferParams: map[string]any{"block_id": "b"},
+				OriginalBody:     []byte(tc.original),
+				Body:             parsed,
+				ResponseWriter:   httptest.NewRecorder(),
+			}
+			if err := step.Execute(context.Background(), reqCtx); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if string(got[tc.wantField]) != tc.wantRaw {
+				t.Errorf("%s bytes reordered:\n got: %s\nwant: %s", tc.wantField, got[tc.wantField], tc.wantRaw)
+			}
+			if _, ok := got[reqcommon.FieldKVTransferParams]; !ok {
+				t.Errorf("kv_transfer_params missing from upstream body")
+			}
+		})
+	}
+}

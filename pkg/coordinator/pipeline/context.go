@@ -17,7 +17,11 @@ limitations under the License.
 package pipeline
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -170,4 +174,51 @@ type MultimodalEntry struct {
 type PlaceholderRange struct {
 	Offset int `json:"offset"`
 	Length int `json:"length"`
+}
+
+// MarshalBody marshals an upstream request body derived from rc.Body. Top-level
+// values that still equal what the client sent are copied byte-for-byte from
+// OriginalBody, so nested key order (e.g. tools[].function.parameters.properties)
+// survives; json.Marshal of a map[string]any would sort every level. Values a
+// step changed are marshaled normally. Falls back to json.Marshal when
+// OriginalBody is empty or unparsable.
+func (rc *RequestContext) MarshalBody(body map[string]any) ([]byte, error) {
+	var raw map[string]json.RawMessage
+	var orig map[string]any
+	if len(rc.OriginalBody) == 0 ||
+		json.Unmarshal(rc.OriginalBody, &raw) != nil ||
+		json.Unmarshal(rc.OriginalBody, &orig) != nil {
+		return json.Marshal(body)
+	}
+
+	keys := make([]string, 0, len(body))
+	for k := range body {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		kb, err := json.Marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(kb)
+		buf.WriteByte(':')
+		if r, ok := raw[k]; ok && reflect.DeepEqual(body[k], orig[k]) {
+			buf.Write(r)
+			continue
+		}
+		vb, err := json.Marshal(body[k])
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(vb)
+	}
+	buf.WriteByte('}')
+	return buf.Bytes(), nil
 }
