@@ -93,7 +93,7 @@ func (s *PrefillStep) Execute(ctx context.Context, reqCtx *pipeline.RequestConte
 		return fmt.Errorf("prefill: %w", err)
 	}
 
-	bodyBytes, err := json.Marshal(body)
+	bodyBytes, err := reqCtx.MarshalBody(body)
 	if err != nil {
 		return fmt.Errorf("prefill: marshal: %w", err)
 	}

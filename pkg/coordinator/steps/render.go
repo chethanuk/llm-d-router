@@ -313,7 +313,7 @@ func (s *RenderStep) postRender(ctx context.Context, reqCtx *pipeline.RequestCon
 
 	logger := log.FromContext(ctx).WithName(RenderStepName)
 
-	body, err := json.Marshal(reqCtx.Body)
+	body, err := reqCtx.MarshalBody(reqCtx.Body)
 	if err != nil {
 		return fmt.Errorf("marshaling request for render: %w", err)
 	}
