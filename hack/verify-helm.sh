@@ -362,6 +362,22 @@ if ! grep -q -- '--secure-serving=false' "${flag_render_output}"; then
   exit 1
 fi
 
+echo "Verifying namespace-only install renders no cluster RBAC..."
+declare -A ns_only
+ns_only[llm-d-router-gateway:no-auth]="--set router.monitoring.prometheus.auth.enabled=false"
+ns_only[llm-d-router-standalone:no-auth]="--set router.inferencePool.create=false --set router.monitoring.prometheus.auth.enabled=false"
+ns_only[llm-d-router-standalone:prometheus-no-auth]="--set router.inferencePool.create=false --set router.monitoring.prometheus.enabled=true --set router.monitoring.prometheus.auth.enabled=false"
+ns_only[llm-d-router-standalone:gmp-no-auth]="--set router.inferencePool.create=false --set router.monitoring.prometheus.enabled=true --set router.monitoring.prometheus.auth.enabled=false --set router.monitoring.provider.name=gmp"
+ns_only[llm-d-router-gateway:gmp-no-auth]="--set provider.name=gke --set router.monitoring.prometheus.enabled=true --set router.monitoring.prometheus.auth.enabled=false --set router.monitoring.provider.name=gmp"
+for key in "${!ns_only[@]}"; do
+  out="${TEMP_DIR}/ns-only-${key//:/-}.yaml"
+  eval "${HELM} template ns-only ${SCRIPT_ROOT}/config/charts/${key%%:*} --set router.modelServers.matchLabels.app=llm-instance-gateway ${ns_only[$key]} > ${out}" || exit 1
+  if grep -Eq -- '^kind: ClusterRole(Binding)?$' "${out}"; then
+    echo "Namespace-only case ${key} rendered cluster RBAC"
+    exit 1
+  fi
+done
+
 if ! HELM="${HELM}" bash "${SCRIPT_ROOT}/hack/verify-plugins-config.sh"; then
   echo "Structured plugins configuration validation failed"
   exit 1
