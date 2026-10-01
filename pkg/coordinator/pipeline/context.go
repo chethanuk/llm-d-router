@@ -181,7 +181,7 @@ type PlaceholderRange struct {
 // OriginalBody, so nested key order (e.g. tools[].function.parameters.properties)
 // survives; json.Marshal of a map[string]any would sort every level. Values a
 // step changed are marshaled normally. Falls back to json.Marshal when
-// OriginalBody is empty or unparseable.
+// OriginalBody is empty or unparsable.
 func (rc *RequestContext) MarshalBody(body map[string]any) ([]byte, error) {
 	var raw map[string]json.RawMessage
 	var orig map[string]any

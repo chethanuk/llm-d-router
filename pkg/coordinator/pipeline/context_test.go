@@ -156,7 +156,7 @@ func TestRequestContext_MarshalBody(t *testing.T) {
 		{"injected key marshaled fresh", `{"t":{"z":1,"a":2}}`, func(b map[string]any) { b["kv"] = "x" }, `{"kv":"x","t":{"z":1,"a":2}}`},
 		{"null preserved", `{"tool_choice":null}`, nil, `{"tool_choice":null}`},
 		{"empty original falls back", ``, nil, `{"a":{"a":1,"z":2}}`},
-		{"unparseable original falls back", `not json`, nil, `{"a":{"a":1,"z":2}}`},
+		{"unparsable original falls back", `not json`, nil, `{"a":{"a":1,"z":2}}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
