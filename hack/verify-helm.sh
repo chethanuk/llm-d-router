@@ -477,3 +477,22 @@ if ! grep -q -- 'agentgateway-config-template' "${agentgateway_service_mode_outp
   echo "Agentgateway service mode did not mount the agentgateway config in the proxy Deployment"
   exit 1
 fi
+
+echo "Verifying llm-d-router-standalone proxy preset args..."
+arg_rendered() { if [ -z "$3" ]; then grep -q -- "- \"$2\"\$" "$1"; else grep -A1 -- "- \"$2\"\$" "$1" | grep -q -- "- \"$3\"\$"; fi; }
+envoy_default_output="${TEMP_DIR}/llm-d-router-standalone-envoy-default-render.yaml"
+${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.modelServers.matchLabels.app=llm-instance-gateway --set router.inferencePool.create=false > "${envoy_default_output}" || exit 1
+envoy_explicit_args_output="${TEMP_DIR}/llm-d-router-standalone-envoy-explicit-args-render.yaml"
+${HELM} template ${SCRIPT_ROOT}/config/charts/llm-d-router-standalone --set router.modelServers.matchLabels.app=llm-instance-gateway --set router.inferencePool.create=false --set 'router.proxy.args={--concurrency,4,-c,/etc/envoy/envoy.yaml}' > "${envoy_explicit_args_output}" || exit 1
+# name:file:flag:value:want (1 = rendered, 0 = absent; empty value = flag alone)
+for c in "sidecar:${envoy_default_output}:--concurrency:8:1" "sidecar-cpuset:${envoy_default_output}:--cpuset-threads::0" \
+         "service:${proxy_service_render_output}:--concurrency:8:1" \
+         "agentgateway:${agentgateway_render_output}:--concurrency:8:0" "agentgateway-preset:${agentgateway_render_output}:-f:/config/config.yaml:1" \
+         "explicit:${envoy_explicit_args_output}:--concurrency:4:1" "explicit-preset:${envoy_explicit_args_output}:--concurrency:8:0"; do
+  IFS=: read -r name file flag value want <<< "${c}"
+  if arg_rendered "${file}" "${flag}" "${value}"; then got=1; else got=0; fi
+  if [ "${got}" != "${want}" ]; then
+    echo "Proxy args for ${name}: ${flag} ${value} rendered=${got}, want ${want}"
+    exit 1
+  fi
+done
