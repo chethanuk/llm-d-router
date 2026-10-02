@@ -572,14 +572,105 @@ func TestZMQSubscriber_ProactiveReplayAcceptsEndAfterProgress(t *testing.T) {
 	require.Len(t, hits[key], 1, "terminal marker after replay progress must preserve the rebuilt index")
 }
 
-func TestZMQSubscriber_ProactiveReplayRejectsTruncatedHistory(t *testing.T) {
-	h := newReplayHarness(t, []replayMessage{
-		{seq: 1, payload: buildDistinctBlockStoredPayload(t, 200)},
-	}, false)
+func (h *replayHarness) requireIndexed(t *testing.T, hash uint64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := h.index.GetRequestKey(h.ctx, kvblock.BlockHash(hash))
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "hash %d should be indexed", hash)
+}
 
-	time.Sleep(300 * time.Millisecond)
-	_, err := h.index.GetRequestKey(h.ctx, kvblock.BlockHash(200))
-	require.Error(t, err, "replay starting after the requested sequence must not populate the index")
+func (h *replayHarness) requirePodCleared(t *testing.T, hash uint64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		key, err := h.index.GetRequestKey(h.ctx, kvblock.BlockHash(hash))
+		if err != nil {
+			return false
+		}
+		hits, err := h.index.Lookup(h.ctx, []kvblock.BlockHash{key}, nil)
+		return err == nil && len(hits[key]) == 0
+	}, 5*time.Second, 50*time.Millisecond, "hash %d should be indexed then cleared", hash)
+}
+
+func TestZMQSubscriber_ColdStartReplayAnchorsOnFirstRetainedFrame(t *testing.T) {
+	tests := []struct {
+		name   string
+		ring   []replayMessage
+		verify func(t *testing.T, h *replayHarness)
+	}{
+		{
+			name: "rolled ring is indexed and live events continue without another replay",
+			ring: []replayMessage{
+				{seq: 5000, payload: buildDistinctBlockStoredPayload(t, 100)},
+				{seq: 5001, payload: buildDistinctBlockStoredPayload(t, 200)},
+				{seq: 5002, payload: buildDistinctBlockStoredPayload(t, 300)},
+			},
+			verify: func(t *testing.T, h *replayHarness) {
+				for _, hash := range []uint64{100, 200, 300} {
+					h.requireIndexed(t, hash)
+				}
+				h.send(t, 5003, buildDistinctBlockStoredPayload(t, 400))
+				h.requireIndexed(t, 400)
+				require.Equal(t, int32(1), h.buffer.requests.Load(), "anchored replay must not trigger another replay")
+			},
+		},
+		{
+			name: "ring starting at sequence 1 is indexed",
+			ring: []replayMessage{
+				{seq: 1, payload: buildDistinctBlockStoredPayload(t, 200)},
+			},
+			verify: func(t *testing.T, h *replayHarness) {
+				h.requireIndexed(t, 200)
+			},
+		},
+		{
+			name: "empty ring still seeds from the first live event",
+			ring: nil,
+			verify: func(t *testing.T, h *replayHarness) {
+				h.send(t, 9000, buildDistinctBlockStoredPayload(t, 900))
+				h.requireIndexed(t, 900)
+			},
+		},
+		{
+			name: "hole inside the retained window clears the pod",
+			ring: []replayMessage{
+				{seq: 5000, payload: buildDistinctBlockStoredPayload(t, 100)},
+				{seq: 5002, payload: buildDistinctBlockStoredPayload(t, 300)},
+			},
+			verify: func(t *testing.T, h *replayHarness) {
+				require.Eventually(t, func() bool { return h.buffer.requests.Load() >= 1 },
+					5*time.Second, 50*time.Millisecond)
+				h.requirePodCleared(t, 100)
+				_, err := h.index.GetRequestKey(h.ctx, kvblock.BlockHash(300))
+				require.Error(t, err, "event after a hole must not be indexed")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.verify(t, newReplayHarness(t, tt.ring, false))
+		})
+	}
+}
+
+func TestZMQSubscriber_GapReplayOverRolledRingStaysRejected(t *testing.T) {
+	h := newReplayHarness(t, nil, false)
+	h.send(t, 0, buildDistinctBlockStoredPayload(t, 100))
+	h.requireIndexed(t, 100)
+
+	// Ring rolled past lastSeq+1: events 1..4 are gone, so the gap cannot be filled.
+	h.buffer.set(
+		replayMessage{seq: 5, payload: buildDistinctBlockStoredPayload(t, 500)},
+		replayMessage{seq: 6, payload: buildDistinctBlockStoredPayload(t, 600)},
+	)
+	h.send(t, 3, buildDistinctBlockStoredPayload(t, 300))
+	require.Eventually(t, func() bool { return h.buffer.requests.Load() == 2 },
+		5*time.Second, 50*time.Millisecond, "gap replay expected")
+	h.requirePodCleared(t, 100)
+	for _, hash := range []uint64{300, 500, 600} {
+		_, err := h.index.GetRequestKey(h.ctx, kvblock.BlockHash(hash))
+		require.Error(t, err, "hash %d must not be indexed from a rolled ring on gap fill", hash)
+	}
 }
 
 func TestZMQSubscriber_ProactiveReplayClearsPartialHistoryOnGap(t *testing.T) {

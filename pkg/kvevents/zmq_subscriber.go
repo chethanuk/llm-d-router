@@ -338,6 +338,12 @@ func (z *zmqSubscriber) requestReplay(ctx context.Context, startSeq uint64) bool
 
 	replayed := 0
 	nextSeq := startSeq
+	// A cold-start replay (startSeq == 0) can begin above 0 because the
+	// publisher's replay ring is bounded and has dropped its oldest events.
+	// Anchor on the first retained frame; later frames stay strictly contiguous.
+	// Declared outside the attempt loop so a resumed attempt (nextSeq > 0) is
+	// never anchored over a real hole.
+	anchorPending := startSeq == 0
 	attempt := 0
 	noProgressAttempts := 0
 	for {
@@ -422,11 +428,18 @@ func (z *zmqSubscriber) requestReplay(ctx context.Context, startSeq uint64) bool
 				terminalErr = fmt.Errorf("malformed replay frame with %d frames", len(frames))
 				break
 			}
+			if anchorPending && seq > expectedSeq {
+				logger.Info("Cold-start replay anchored at the publisher's oldest retained event",
+					"requestedSeq", expectedSeq, "firstSeq", seq,
+					"replayEndpoint", z.replayEndpoint)
+				expectedSeq = seq
+			}
 			if seq != expectedSeq {
 				terminalErr = fmt.Errorf("incomplete replay: expected sequence %d, got %d", expectedSeq, seq)
 				break
 			}
 
+			anchorPending = false
 			z.addTask(ctx, topic, seq, payload)
 			z.lastSeq = seq
 			z.hasLastSeq = true
