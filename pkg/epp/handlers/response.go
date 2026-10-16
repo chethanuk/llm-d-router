@@ -198,6 +198,21 @@ func (s *StreamingServer) generateResponseHeaders(reqCtx *RequestContext) []*con
 		})
 	}
 
+	// Sample the band's remaining request capacity as the response passes rather than at admission: a
+	// queued request can wait an unbounded time in between, and the reading is only actionable for a
+	// client pacing its next submissions if it is current. Absent when no reading is available; zero
+	// means the band is full.
+	if reqCtx.FlowBandHeadroomRequests != nil {
+		if headroom, ok := reqCtx.FlowBandHeadroomRequests(); ok {
+			headers = append(headers, &configPb.HeaderValueOption{
+				Header: &configPb.HeaderValue{
+					Key:      metadata.FlowBandHeadroomRequestsHeaderKey,
+					RawValue: []byte(strconv.FormatUint(headroom, 10)),
+				},
+			})
+		}
+	}
+
 	// Include any non-system-owned headers.
 	for key, value := range reqCtx.Response.Headers {
 		if request.IsSystemOwnedHeader(key) {

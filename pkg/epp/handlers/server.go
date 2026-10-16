@@ -152,6 +152,11 @@ type RequestContext struct {
 	// FlowControlQueueDuration is the wall-clock time the request spent in flow control admission
 	// (enqueue-and-wait). Meaningful only when FlowControlAdmitted is true.
 	FlowControlQueueDuration time.Duration
+	// FlowBandHeadroomRequests samples the remaining request capacity of the flow control priority band
+	// this request occupied, reporting false when no reading is available. It is called at the
+	// response-headers phase so the reading is current as the response passes, rather than fixed at
+	// admission time, and is nil when flow control did not dispatch the request.
+	FlowBandHeadroomRequests func() (uint64, bool)
 
 	// Lifecycle bookkeeping.
 	firstTokenTimestamp        time.Time
