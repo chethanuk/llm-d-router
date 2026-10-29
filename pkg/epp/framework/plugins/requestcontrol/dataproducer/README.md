@@ -45,6 +45,7 @@ The DAG order applies to every request-control hook (`PreRequest`, `ResponseBody
 | `predicted-latency-producer` | [`predictedlatency`](predictedlatency/) | `LatencyPredictionInfo` | Trains XGBoost models via a sidecar and generates per-endpoint TTFT/TPOT predictions. |
 | `latency-observer-producer-hub` | [`latencyobserver`](latencyobserver/) | `TTFTPercentiles` | Measures each request's actual time-to-first-token and publishes per-endpoint percentile anchors for `latency-observation-scorer-hub`. Needs nothing from the endpoint but its response. |
 | `session-id-producer` | [`sessionid`](sessionid/) | `SessionID` | Extracts a session identifier from a request header or cookie and publishes it for affinity-aware plugins. |
+| `session-prefix-cache-producer` | [`sessionprefixcache`](sessionprefixcache/) | `PrefixCacheMatchInfo` | Tokenizer-free, stock-engine prefix-cache affinity: hashes framed request content into fixed-size byte chunks and matches against a per-pod LRU of content-verified chains. |
 | `mm-embeddings-cache-producer` | [`multimodal`](multimodal/) | `EncoderCacheMatchInfo` | Tracks which pods recently processed each multimodal input hash and scores encoder-cache affinity. |
 | `p2p-source-producer` | [`p2psource`](p2psource/) | `ReusablePrefixTokens` | Samples a P2P source, publishes a reusable-prefix floor for scheduling, and sets the source header after the computing pod is selected. |
 
@@ -71,4 +72,5 @@ The framework resolves a DAG from each plugin's `Produces` and `Consumes` declar
 - [Predicted Latency Producer](predictedlatency/README.md)
 - [Latency Observer Producer](latencyobserver/README.md)
 - [Session ID Producer](sessionid/README.md)
+- [Session Prefix Cache Producer](sessionprefixcache/README.md)
 - [Multimodal Embeddings Cache Producer](multimodal/README.md)
