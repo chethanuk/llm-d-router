@@ -587,14 +587,17 @@ type ImagesGenerationsRequest struct {
 	Size string `json:"size,omitempty"`
 	// NumInferenceSteps is the number of denoising steps. Nil means the server default.
 	NumInferenceSteps *int64 `json:"num_inference_steps,omitempty"`
+	// NegativePrompt describes what to avoid in the generated image(s) and is
+	// encoded alongside Prompt for classifier-free guidance.
+	NegativePrompt string `json:"negative_prompt,omitempty"`
 }
 
 func (i *ImagesGenerationsRequest) String() string {
 	if i == nil {
 		return nilStr
 	}
-	return fmt.Sprintf("{PromptLength: %d, Size: %s, N: %v, NumInferenceSteps: %v}",
-		len(i.Prompt), i.Size, i.N, i.NumInferenceSteps)
+	return fmt.Sprintf("{PromptLength: %d, Size: %s, N: %v, NumInferenceSteps: %v, NegativePromptLength: %d}",
+		len(i.Prompt), i.Size, i.N, i.NumInferenceSteps, len(i.NegativePrompt))
 }
 
 // GenerateRequest holds pre-tokenized input for native generate endpoints
