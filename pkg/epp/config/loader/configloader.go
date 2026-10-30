@@ -297,6 +297,12 @@ func findPluginDependencies(params any) []string {
 			if (value.Kind() == reflect.Pointer && value.IsNil()) || !field.IsExported() {
 				continue
 			}
+			if value.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Struct {
+				for idx := range value.Len() {
+					dependencies = append(dependencies, findPluginDependencies(value.Index(idx).Interface())...)
+				}
+				continue
+			}
 			if (value.Kind() == reflect.Pointer && field.Type.Elem().Kind() != reflect.String) || value.Kind() == reflect.Struct {
 				dependencies = append(dependencies, findPluginDependencies(value.Interface())...)
 			} else {

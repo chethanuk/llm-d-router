@@ -71,14 +71,29 @@ type RevisionGating struct {
 	Overflow            *RevisionOverflow `json:"overflow,omitempty"`
 }
 
-// RevisionOverflow sends a request to another revision when the guard admits
-// no endpoint of Role in the drawn revision; see the README's Revision Overflow.
+// RevisionOverflow sends a request to another revision when a guard admits no
+// endpoint of its role in the drawn revision; see the README's Revision Overflow.
 type RevisionOverflow struct {
 	// Role is the role whose endpoints must have room. Defaults to prefill.
 	Role string `json:"role,omitempty"`
 	// GuardPluginName names the fail-closed scheduling filter that decides
 	// room, typically the concurrency-detector of Role's profile.
 	GuardPluginName string `json:"guardPluginName" pluginRef:""`
+	// Guards checks several roles and replaces Role and GuardPluginName.
+	Guards []OverflowGuard `json:"guards,omitempty"`
+}
+
+// OverflowGuard is the guard that decides room for one role.
+type OverflowGuard struct {
+	Role            string `json:"role"`
+	GuardPluginName string `json:"guardPluginName" pluginRef:""`
+}
+
+func (o *RevisionOverflow) guards() []OverflowGuard {
+	if len(o.Guards) > 0 {
+		return o.Guards
+	}
+	return []OverflowGuard{{Role: o.Role, GuardPluginName: o.GuardPluginName}}
 }
 
 // DefaultOverflowRole is the role checked for room by default.
@@ -190,14 +205,27 @@ func (c *Config) Validate() error {
 		if !c.RevisionGating.Active() {
 			return fmt.Errorf("revisionGating.overflow requires revisionGating.mode %s or %s", GatingModeSum, GatingModeMaxRole)
 		}
-		if overflow.GuardPluginName == "" {
+		if len(overflow.Guards) > 0 && (overflow.GuardPluginName != "" || overflow.Role != "") {
+			return errors.New("revisionGating.overflow.guards cannot be combined with guardPluginName or role")
+		}
+		if len(overflow.Guards) == 0 && overflow.GuardPluginName == "" {
 			return errors.New("revisionGating.overflow.guardPluginName is required")
 		}
-		if overflow.Role == "" {
+		if len(overflow.Guards) == 0 && overflow.Role == "" {
 			overflow.Role = DefaultOverflowRole
 		}
-		if !slices.Contains(c.RevisionGating.RequiredRoles, overflow.Role) {
-			return fmt.Errorf("revisionGating.overflow.role %q must be one of revisionGating.requiredRoles", overflow.Role)
+		seenRoles := make(map[string]struct{}, len(overflow.guards()))
+		for i, guard := range overflow.guards() {
+			if guard.GuardPluginName == "" {
+				return fmt.Errorf("revisionGating.overflow.guards[%d].guardPluginName is required", i)
+			}
+			if !slices.Contains(c.RevisionGating.RequiredRoles, guard.Role) {
+				return fmt.Errorf("revisionGating.overflow role %q must be one of revisionGating.requiredRoles", guard.Role)
+			}
+			if _, exists := seenRoles[guard.Role]; exists {
+				return fmt.Errorf("revisionGating.overflow.guards contains duplicate role %q", guard.Role)
+			}
+			seenRoles[guard.Role] = struct{}{}
 		}
 	}
 

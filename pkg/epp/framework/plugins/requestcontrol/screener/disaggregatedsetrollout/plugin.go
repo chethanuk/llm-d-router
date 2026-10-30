@@ -58,7 +58,7 @@ type Screener struct {
 	revisionDecisionStateKey fwkdl.StateKey
 	handle                   fwkplugin.Handle
 	localRevisionDecisions   *fwkplugin.PluginState
-	overflowGuard            fwksched.Filter
+	overflowGuard            map[string]fwksched.Filter // by role
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo

@@ -328,12 +328,15 @@ request. Do not add it to a scheduling profile.
 | `revisionGating.disableCoordination` | boolean | No | `false` | Disables coordination of rollout revisions across parallel requests. Set only for known sequential P/D deployments; E/P/D requires coordination. |
 | `revisionGating.overflow.guardPluginName` | string | No | | Enables overflow: when this filter admits no endpoint of `overflow.role` in the drawn revision, the request goes to a revision where it admits one; see [Revision Overflow](#revision-overflow). A fail-closed scheduling filter. |
 | `revisionGating.overflow.role` | string | No | `prefill` | The role whose endpoints must have room; one of `requiredRoles`. |
+| `revisionGating.overflow.guards` | list | No | | One `{role, guardPluginName}` entry per role to check, used in place of `guardPluginName` and `role`. Each role is one of `requiredRoles` and appears once. |
 
 ## Revision Overflow
 
 Flow control admits on the average load of the whole pool, so during a rollout
 one revision can be full while the other has room. A fail-closed concurrency
 filter then rejects the request with HTTP 429 although capacity exists.
+
+The screener is Alpha, so the EPP needs `--allow-experimental-plugins` to start.
 
 ```yaml
     - type: concurrency-detector
@@ -344,6 +347,8 @@ filter then rejects the request with HTTP 429 although capacity exists.
         failOpen: false
     - type: disaggregatedset-rollout-screener
       parameters:
+        scope:
+          labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
         revisionGating:
           mode: max-role
           requiredRoles: [prefill, decode]
@@ -351,14 +356,24 @@ filter then rejects the request with HTTP 429 although capacity exists.
             guardPluginName: prefill-concurrency-guard
 ```
 
-- Use the same guard plugin as the prefill profile's filter, so the Screener
+To check more than one role, define a guard plugin for each, here also
+`decode-concurrency-guard`, and list them in place of `guardPluginName`:
+
+```yaml
+          overflow:
+            guards:
+              - {role: prefill, guardPluginName: prefill-concurrency-guard}
+              - {role: decode, guardPluginName: decode-concurrency-guard}
+```
+
+- Use the same guard plugin as the role's profile filter, so the Screener
   and the profile decide room alike.
-- After drawing a revision, the Screener runs the guard on the endpoints of
-  `overflow.role` in the drawn revision. When it admits none, the request goes
-  to a revision where it admits one, drawn over those revisions' shares. The
+- After drawing a revision, the Screener runs each guard on the endpoints of
+  its role in the drawn revision. When one admits none, the request goes to a
+  revision where every guard admits one, drawn over those revisions' shares. The
   limits stay in the guard's config, so the two cannot drift apart. Only
   endpoints in `scope` count as room.
-- The guard must fail closed: a filter that returns every endpoint when all
+- Every guard must fail closed: a filter that returns every endpoint when all
   are full never shows a full revision. A `concurrency-detector` with
   `failOpen` unset or `true` is rejected at startup.
 - Nothing is stored: the next request is drawn again as usual, so only the
@@ -367,9 +382,8 @@ filter then rejects the request with HTTP 429 although capacity exists.
   header is never overridden.
 - The guard runs before the data producers, so a token limit sees the
   endpoint's in-flight tokens but not the uncached tokens of this request. A
-  full endpoint of another role (for example decode) does not trigger
-  overflow.
-- The Screener runs before the P/D decider, so it checks prefill room even for
+  full endpoint of a role with no guard does not trigger overflow.
+- The Screener runs before the P/D decider, so a prefill guard runs even for
   a request the decider will later serve decode-only; with an always-disaggregate
   decider every request uses prefill. It also sees the endpoints before other
   Screeners narrow them.
