@@ -1269,6 +1269,7 @@ func TestOpenAIParser_ParseRequest(t *testing.T) {
 					N:                 ptr.To[int64](2),
 					Size:              "1024x1024",
 					NumInferenceSteps: ptr.To[int64](30),
+					NegativePrompt:    "blurry",
 				},
 				Payload: fwkrh.PayloadMap{
 					"model":               "test-image-model",
@@ -1447,6 +1448,7 @@ func TestOpenAIParser_ParseRequest_ImagesEdits(t *testing.T) {
 				"n":                   "2",
 				"size":                "1024x1024",
 				"num_inference_steps": "30",
+				"negative_prompt":     "blurry",
 			},
 			wantModel: "test-image-model",
 			wantImages: &fwkrh.ImagesGenerationsRequest{
@@ -1454,6 +1456,7 @@ func TestOpenAIParser_ParseRequest_ImagesEdits(t *testing.T) {
 				N:                 ptr.To[int64](2),
 				Size:              "1024x1024",
 				NumInferenceSteps: ptr.To[int64](30),
+				NegativePrompt:    "blurry",
 			},
 		},
 		{
