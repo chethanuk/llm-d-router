@@ -487,6 +487,8 @@ func parseImagesEditsRequest(body []byte, headers map[string]string) (*fwkrh.Par
 			images.Prompt = string(value)
 		case "size":
 			images.Size = string(value)
+		case "negative_prompt":
+			images.NegativePrompt = string(value)
 		case "n":
 			n, err := strconv.ParseInt(string(value), 10, 64)
 			if err != nil {
