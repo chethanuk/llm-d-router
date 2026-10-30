@@ -30,25 +30,29 @@ func (c *Screener) resolveOverflowGuard() error {
 	if c.config.RevisionGating == nil || c.config.RevisionGating.Overflow == nil {
 		return nil
 	}
-	name := c.config.RevisionGating.Overflow.GuardPluginName
-	plugin := c.handle.Plugin(name)
-	if plugin == nil {
-		return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q not found", name)
+	guards := map[string]fwksched.Filter{}
+	for _, entry := range c.config.RevisionGating.Overflow.guards() {
+		name := entry.GuardPluginName
+		plugin := c.handle.Plugin(name)
+		if plugin == nil {
+			return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q not found", name)
+		}
+		guard, ok := plugin.(fwksched.Filter)
+		if !ok {
+			return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q is not a scheduling filter", name)
+		}
+		if failOpen, ok := plugin.(interface{ FailsOpen() bool }); ok && failOpen.FailsOpen() {
+			return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q fails open; set failOpen: false", name)
+		}
+		guards[entry.Role] = guard
 	}
-	guard, ok := plugin.(fwksched.Filter)
-	if !ok {
-		return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q is not a scheduling filter", name)
-	}
-	if failOpen, ok := plugin.(interface{ FailsOpen() bool }); ok && failOpen.FailsOpen() {
-		return fmt.Errorf("revisionGating.overflow.guardPluginName: plugin %q fails open; set failOpen: false", name)
-	}
-	c.overflowGuard = guard
+	c.overflowGuard = guards
 	return nil
 }
 
-// overflowRevision returns chosen, or, when overflow is configured and the
-// guard admits no endpoint of the overflow role in chosen, a revision where it
-// admits one. When no revision has room, chosen is kept: moving would not help.
+// overflowRevision returns chosen, or, when overflow is configured and chosen
+// has no room, a revision that has room. When no revision has room, chosen is
+// kept: moving would not help.
 func (c *Screener) overflowRevision(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint,
 	shares map[string]float64, chosen string, draw float64) string {
 	if c.overflowGuard == nil || chosen == "" {
@@ -90,7 +94,10 @@ func (c *Screener) overflowRevisionOf(endpoint fwksched.Endpoint) string {
 		return ""
 	}
 	metadata := endpoint.GetMetadata()
-	if metadata == nil || metadata.Labels[c.roleLabelKey] != c.config.RevisionGating.Overflow.Role {
+	if metadata == nil {
+		return ""
+	}
+	if _, guarded := c.overflowGuard[metadata.Labels[c.roleLabelKey]]; !guarded {
 		return ""
 	}
 	if c.scope != nil && !c.scope.Matches(labels.Set(metadata.Labels)) {
@@ -99,8 +106,20 @@ func (c *Screener) overflowRevisionOf(endpoint fwksched.Endpoint) string {
 	return metadata.Labels[c.revisionLabelKey]
 }
 
+// hasRoom reports whether every guard admits an endpoint of its role. A role
+// with no endpoint here has no room.
 func (c *Screener) hasRoom(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) bool {
-	return len(c.overflowGuard.Filter(ctx, request, endpoints)) > 0
+	byRole := make(map[string][]fwksched.Endpoint, len(c.overflowGuard))
+	for _, endpoint := range endpoints {
+		role := endpoint.GetMetadata().Labels[c.roleLabelKey]
+		byRole[role] = append(byRole[role], endpoint)
+	}
+	for role, guard := range c.overflowGuard {
+		if len(byRole[role]) == 0 || len(guard.Filter(ctx, request, byRole[role])) == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // drawWithin rescales draw from revision's slice of the pickWeightedRevision

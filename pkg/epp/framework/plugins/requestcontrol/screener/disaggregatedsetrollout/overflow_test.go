@@ -185,6 +185,170 @@ func TestOverflowChecksOnlyTheConfiguredRole(t *testing.T) {
 	assertNoOverflow(t, screener, pool)
 }
 
+// roleLoads holds the in-flight requests of each endpoint of one revision, by
+// role. A nil slice means the role has no endpoint in the pool.
+type roleLoads struct {
+	prefill, decode []int64
+}
+
+// multiGuardScreener guards prefill and decode with separate detectors.
+func multiGuardScreener(t *testing.T) *Screener {
+	t.Helper()
+	config := validConfig()
+	config.RevisionGating.Overflow = &RevisionOverflow{Guards: []OverflowGuard{
+		{Role: "prefill", GuardPluginName: "prefill-guard"},
+		{Role: "decode", GuardPluginName: "decode-guard"},
+	}}
+	if err := config.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	handle := fwkplugin.NewEppHandle(context.Background(), nil)
+	for _, name := range []string{"prefill-guard", "decode-guard"} {
+		guard, err := concurrency.ConcurrencyDetectorFactory(name, json.NewDecoder(strings.NewReader(testGuardParams)), handle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle.AddPlugin(name, guard)
+	}
+	scope, err := labels.Parse(config.Scope.LabelSelector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screener := newScreener("test-screener", config, scope, handle)
+	if err := screener.resolveOverflowGuard(); err != nil {
+		t.Fatal(err)
+	}
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 2, "decode": 2},
+		"v2": {"prefill": 2, "decode": 2},
+	})
+	return screener
+}
+
+func TestOverflowChecksEveryGuard(t *testing.T) {
+	free := []int64{0, 0}
+	full := []int64{testOverflowLimit, testOverflowLimit}
+	tests := []struct {
+		name   string
+		v1, v2 roleLoads
+		// extra endpoints join the pool with no load.
+		extra []fwksched.Endpoint
+		// wantOnly is the revision serving every request; empty means requests
+		// stay on the revision they drew.
+		wantOnly string
+	}{
+		{
+			name: "every role has room",
+			v1:   roleLoads{free, free},
+			v2:   roleLoads{free, free},
+		},
+		{
+			name:     "full decode moves requests off the revision",
+			v1:       roleLoads{free, full},
+			v2:       roleLoads{free, free},
+			wantOnly: "v2",
+		},
+		{
+			name:     "full prefill moves requests off the revision",
+			v1:       roleLoads{full, free},
+			v2:       roleLoads{free, free},
+			wantOnly: "v2",
+		},
+		{
+			name: "revisions full on different roles have no room to move to",
+			v1:   roleLoads{full, free},
+			v2:   roleLoads{free, full},
+		},
+		{
+			name: "every role full everywhere keeps the drawn revision",
+			v1:   roleLoads{full, full},
+			v2:   roleLoads{full, full},
+		},
+		{
+			name: "one decode endpoint with a slot is room",
+			v1:   roleLoads{free, []int64{testOverflowLimit, testOverflowLimit - 1}},
+			v2:   roleLoads{free, free},
+		},
+		{
+			name:     "a guarded role with no endpoint in the pool has no room",
+			v1:       roleLoads{free, nil},
+			v2:       roleLoads{free, free},
+			wantOnly: "v2",
+		},
+		{
+			name: "an out-of-scope decode endpoint does not count as room",
+			v1:   roleLoads{free, full},
+			v2:   roleLoads{free, full},
+			extra: []fwksched.Endpoint{
+				endpoint("v2-decode-unreleased", map[string]string{testRevLabel: "v2", testRoleLabel: "decode"}),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var pool []fwksched.Endpoint
+			for revision, loads := range map[string]roleLoads{"v1": tt.v1, "v2": tt.v2} {
+				for role, requests := range map[string][]int64{"prefill": loads.prefill, "decode": loads.decode} {
+					for i, load := range requests {
+						pool = append(pool, loadedEndpoint(fmt.Sprintf("%s-%s-%d", revision, role, i), revision, role, load))
+					}
+				}
+			}
+			for _, e := range tt.extra {
+				e.Put(attrconcurrency.InFlightLoadDataKey, &attrconcurrency.InFlightLoad{})
+				pool = append(pool, e)
+			}
+			screener := multiGuardScreener(t)
+			if tt.wantOnly == "" {
+				assertNoOverflow(t, screener, pool)
+				return
+			}
+			if counts := screenDraws(t, screener, pool); counts[tt.wantOnly] != testDraws {
+				t.Fatalf("served %v, want every request on %s", counts, tt.wantOnly)
+			}
+		})
+	}
+}
+
+func TestOverflowPicksOnlyARevisionWhereEveryGuardAdmits(t *testing.T) {
+	screener := multiGuardScreener(t)
+	seedCounts(t, screener, map[string]map[string]int{
+		"a": {"prefill": 1, "decode": 1},
+		"b": {"prefill": 1, "decode": 1},
+		"c": {"prefill": 1, "decode": 1},
+	})
+	pool := []fwksched.Endpoint{
+		loadedEndpoint("a-prefill", "a", "prefill", testOverflowLimit),
+		loadedEndpoint("a-decode", "a", "decode", 0),
+		loadedEndpoint("b-prefill", "b", "prefill", 0),
+		loadedEndpoint("b-decode", "b", "decode", testOverflowLimit),
+		loadedEndpoint("c-prefill", "c", "prefill", 0),
+		loadedEndpoint("c-decode", "c", "decode", 0),
+	}
+	if counts := screenDraws(t, screener, pool); counts["c"] != testDraws {
+		t.Fatalf("served %v, want every request on c", counts)
+	}
+}
+
+func TestOverflowWithGuardsNeverOverridesAStrictRevisionHeader(t *testing.T) {
+	pool := []fwksched.Endpoint{
+		loadedEndpoint("v1-prefill", "v1", "prefill", 0),
+		loadedEndpoint("v1-decode", "v1", "decode", testOverflowLimit),
+		loadedEndpoint("v2-prefill", "v2", "prefill", 0),
+		loadedEndpoint("v2-decode", "v2", "decode", 0),
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-llm-d-disagg-revision": "v1"}}
+	if got := screenedRevision(t, multiGuardScreener(t), request, pool); got != "v1" {
+		t.Fatalf("pinned to v1: served by %s", got)
+	}
+}
+
+func TestOverflowSingleGuardChecksOnlyItsRole(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating.Overflow = &RevisionOverflow{Role: "decode", GuardPluginName: testGuardName}
+	assertNoOverflow(t, seededOverflowScreener(t, config), overflowPool(testOverflowLimit, 0))
+}
+
 func TestOverflowNeverOverridesAStrictRevisionHeader(t *testing.T) {
 	screener := seededOverflowScreener(t, overflowConfig())
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-llm-d-disagg-revision": "v1"}}
@@ -240,6 +404,47 @@ func TestOverflowGuardMustBeAFailClosedFilter(t *testing.T) {
 	screener := newScreener("test-screener", config, labels.Everything(), handle)
 	if err := screener.resolveOverflowGuard(); err == nil || !strings.Contains(err.Error(), "not a scheduling filter") {
 		t.Fatalf("non-filter guard: err = %v", err)
+	}
+}
+
+func TestOverflowResolvesEveryListedGuard(t *testing.T) {
+	detector := func(name, params string) fwkplugin.Plugin {
+		guard, err := concurrency.ConcurrencyDetectorFactory(name, json.NewDecoder(strings.NewReader(params)), fwkplugin.NewEppHandle(context.Background(), nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return guard
+	}
+	tests := []struct {
+		name string
+		// second is the decode guard; nil leaves it out of the handle.
+		second fwkplugin.Plugin
+		want   string
+	}{
+		{name: "second guard missing", want: "not found"},
+		{name: "second guard fails open", second: detector("decode-guard", `{"maxConcurrency": 8, "failOpen": true}`), want: "fails open"},
+		{name: "second guard is not a filter", second: newTestScreener(validConfig()), want: "not a scheduling filter"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := validConfig()
+			config.RevisionGating.Overflow = &RevisionOverflow{Guards: []OverflowGuard{
+				{Role: "prefill", GuardPluginName: "prefill-guard"},
+				{Role: "decode", GuardPluginName: "decode-guard"},
+			}}
+			if err := config.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			handle := fwkplugin.NewEppHandle(context.Background(), nil)
+			handle.AddPlugin("prefill-guard", detector("prefill-guard", testGuardParams))
+			if tt.second != nil {
+				handle.AddPlugin("decode-guard", tt.second)
+			}
+			err := newScreener("test-screener", config, labels.Everything(), handle).resolveOverflowGuard()
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

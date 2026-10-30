@@ -215,7 +215,30 @@ func assertValidateError(t *testing.T, cfg Config, wantSubstring string) {
 	}
 }
 
+func TestValidate_OverflowGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		guards []OverflowGuard
+	}{
+		{"one guard per role", []OverflowGuard{{Role: "prefill", GuardPluginName: "p"}, {Role: "decode", GuardPluginName: "d"}}},
+		{"a single guard", []OverflowGuard{{Role: "decode", GuardPluginName: "d"}}},
+		{"one plugin on two roles", []OverflowGuard{{Role: "prefill", GuardPluginName: "g"}, {Role: "decode", GuardPluginName: "g"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.RevisionGating.Overflow = &RevisionOverflow{Guards: tc.guards}
+			// Validate fills in defaults through this pointer, so it must stay repeatable.
+			for range 2 {
+				if err := cfg.Validate(); err != nil {
+					t.Fatalf("guards rejected: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestValidate_Overflow(t *testing.T) {
+	prefillGuard := OverflowGuard{Role: "prefill", GuardPluginName: "g"}
 	cfg := validConfig()
 	cfg.RevisionGating.Overflow = &RevisionOverflow{GuardPluginName: "prefill-guard"}
 	if err := cfg.Validate(); err != nil {
@@ -232,6 +255,14 @@ func TestValidate_Overflow(t *testing.T) {
 		{GatingModeSum, RevisionOverflow{}, "guardPluginName is required"},
 		{GatingModeSum, RevisionOverflow{GuardPluginName: "prefill-guard", Role: "encode"}, "must be one of revisionGating.requiredRoles"},
 		{GatingModeDisabled, RevisionOverflow{GuardPluginName: "prefill-guard"}, "revisionGating.overflow requires revisionGating.mode"},
+		{GatingModeSum, RevisionOverflow{GuardPluginName: "g", Guards: []OverflowGuard{prefillGuard}}, "cannot be combined"},
+		{GatingModeSum, RevisionOverflow{Role: "prefill", Guards: []OverflowGuard{prefillGuard}}, "cannot be combined"},
+		{GatingModeSum, RevisionOverflow{Guards: []OverflowGuard{prefillGuard, {Role: "decode"}}}, "guards[1].guardPluginName is required"},
+		{GatingModeSum, RevisionOverflow{Guards: []OverflowGuard{{GuardPluginName: "g"}}}, "must be one of revisionGating.requiredRoles"},
+		{GatingModeSum, RevisionOverflow{Guards: []OverflowGuard{{Role: "encode", GuardPluginName: "g"}}}, "must be one of revisionGating.requiredRoles"},
+		{GatingModeSum, RevisionOverflow{Guards: []OverflowGuard{prefillGuard, prefillGuard}}, "duplicate role"},
+		{GatingModeSum, RevisionOverflow{Guards: []OverflowGuard{}}, "guardPluginName is required"},
+		{GatingModeDisabled, RevisionOverflow{Guards: []OverflowGuard{prefillGuard}}, "revisionGating.overflow requires revisionGating.mode"},
 	} {
 		cfg := validConfig()
 		cfg.RevisionGating.Mode = tc.mode

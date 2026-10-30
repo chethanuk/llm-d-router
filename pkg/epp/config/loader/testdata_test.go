@@ -189,6 +189,57 @@ plugins:
   type: test-extractor
 `
 
+// overflowGuardsSortAfterScreenerText names the prefill guard so that it sorts
+// after the default-named screener that depends on it.
+const overflowGuardsSortAfterScreenerText = `
+apiVersion: llm-d.ai/v1
+kind: EndpointPickerConfig
+plugins:
+- type: disaggregatedset-rollout-screener
+  parameters:
+    scope:
+      labelSelector: disaggregatedset.x-k8s.io/name=my-set
+    revisionGating:
+      mode: max-role
+      requiredRoles: [prefill, decode]
+      overflow:
+        guards:
+        - {role: prefill, guardPluginName: prefill-concurrency-guard}
+        - {role: decode, guardPluginName: decode-concurrency}
+- name: prefill-concurrency-guard
+  type: concurrency-detector
+  parameters:
+    maxConcurrency: 8
+    failOpen: false
+- name: decode-concurrency
+  type: concurrency-detector
+  parameters:
+    maxConcurrency: 8
+    failOpen: false
+`
+
+const overflowGuardSharedByTwoRolesText = `
+apiVersion: llm-d.ai/v1
+kind: EndpointPickerConfig
+plugins:
+- type: disaggregatedset-rollout-screener
+  parameters:
+    scope:
+      labelSelector: disaggregatedset.x-k8s.io/name=my-set
+    revisionGating:
+      mode: max-role
+      requiredRoles: [prefill, decode]
+      overflow:
+        guards:
+        - {role: prefill, guardPluginName: shared-guard}
+        - {role: decode, guardPluginName: shared-guard}
+- name: shared-guard
+  type: concurrency-detector
+  parameters:
+    maxConcurrency: 8
+    failOpen: false
+`
+
 // successNoProfilesText represents a valid config with plugins but no profiles.
 // The loader should apply the system default profile automatically.
 const successNoProfilesText = `

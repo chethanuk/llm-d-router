@@ -48,8 +48,10 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/fairness/globalstrict"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/ordering/fcfs"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/saturationdetector/composite"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/saturationdetector/concurrency"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/usagelimits"
 	reqdataprodprefix "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/dataproducer/approximateprefix"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggregatedsetrollout"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/anthropic"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/openai"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/passthrough"
@@ -531,6 +533,14 @@ func TestPluginsWithDependencies(t *testing.T) {
 		{
 			name:       "pluginsRefedInNesteding",
 			configText: pluginsRefedInNestedingText,
+		},
+		{
+			name:       "overflowGuardsSortAfterScreener",
+			configText: overflowGuardsSortAfterScreenerText,
+		},
+		{
+			name:       "overflowGuardSharedByTwoRoles",
+			configText: overflowGuardSharedByTwoRolesText,
 		},
 		{
 			name:       "errorPluginsRefedInLoop",
@@ -1339,6 +1349,10 @@ func registerTestPlugins(t *testing.T) {
 	fwkplugin.Register(testProfileHandler, fwkplugin.StabilityStable, func(name string, _ *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
 		return &mockHandler{mockPlugin{t: fwkplugin.TypedName{Name: name, Type: testProfileHandler}}}, nil
 	})
+
+	fwkplugin.Register(concurrency.ConcurrencyDetectorType, fwkplugin.StabilityStable, concurrency.ConcurrencyDetectorFactory)
+	fwkplugin.RegisterWithPluginDependencies(disaggregatedsetrollout.PluginType, fwkplugin.StabilityStable,
+		disaggregatedsetrollout.Factory, disaggregatedsetrollout.ConfigParser)
 
 	fwkplugin.RegisterWithPluginDependencies(composite.MaxSaturationDetectorType, fwkplugin.StabilityStable,
 		composite.MaxSaturationDetectorFactory, composite.MaxSaturationDetectorConfigParser)
