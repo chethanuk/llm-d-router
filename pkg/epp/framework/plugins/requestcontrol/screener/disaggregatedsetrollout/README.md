@@ -345,6 +345,8 @@ filter then rejects the request with HTTP 429 although capacity exists.
         failOpen: false
     - type: disaggregatedset-rollout-screener
       parameters:
+        scope:
+          labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
         revisionGating:
           mode: max-role
           requiredRoles: [prefill, decode]
@@ -352,7 +354,18 @@ filter then rejects the request with HTTP 429 although capacity exists.
             guardPluginName: prefill-concurrency-guard
 ```
 
-To check more than one role, list a guard for each:
+To check more than one role, define a guard plugin for each:
+
+```yaml
+    - type: concurrency-detector
+      name: decode-concurrency-guard
+      parameters:
+        maxConcurrency: 8
+        headroom: 0.5
+        failOpen: false
+```
+
+Then list them in place of `guardPluginName`:
 
 ```yaml
           overflow:
