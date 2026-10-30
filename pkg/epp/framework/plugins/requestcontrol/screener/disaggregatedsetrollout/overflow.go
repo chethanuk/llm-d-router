@@ -66,7 +66,7 @@ func (c *Screener) overflowRevision(ctx context.Context, request *fwksched.Infer
 			chosenCandidates = append(chosenCandidates, endpoint)
 		}
 	}
-	if len(chosenCandidates) > 0 && c.hasRoom(ctx, request, chosenCandidates) {
+	if c.hasRoom(ctx, request, chosenCandidates) {
 		return chosen
 	}
 	byRevision := map[string][]fwksched.Endpoint{}
