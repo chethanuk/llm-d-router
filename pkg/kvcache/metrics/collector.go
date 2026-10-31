@@ -16,6 +16,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,15 @@ const podIdentifierLabel = "pod_identifier"
 const (
 	cacheKindLabel = "cache_kind"
 	reasonLabel    = "reason"
+	engineLabel    = "engine"
+	tagLabel       = "tag"
+)
+
+const (
+	// maxUnknownEventTagValues caps distinct tag label values per process. Engines
+	// add event types rarely, so this leaves room well past a real vocabulary.
+	maxUnknownEventTagValues = 32
+	maxUnknownEventTagBytes  = 64
 )
 
 var (
@@ -120,6 +130,14 @@ var (
 			"Total number of KV-cache removal events skipped for groups excluded from prefix indexing",
 			compbasemetrics.ALPHA),
 	}, []string{cacheKindLabel, reasonLabel})
+	// KVEventUnknownTagsSkipped counts engine events dropped from a batch because
+	// the adapter does not know their tag.
+	KVEventUnknownTagsSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Subsystem: routerSubsystem, Name: "kv_cache_events_unknown_tags_skipped_total",
+		Help: metricsutil.HelpMsgWithStability(
+			"Total number of KV-cache events skipped because the engine adapter does not know their tag",
+			compbasemetrics.ALPHA),
+	}, []string{engineLabel, tagLabel})
 
 	// SubscriberActive tracks the number of ZMQ subscribers currently managed by
 	// the SubscriberManager. A subscriber is counted from creation until it is
@@ -175,7 +193,7 @@ func Collectors() []prometheus.Collector {
 		Admissions, Evictions,
 		LookupRequests, LookupHits, LookupLatency, MaxPodHitCount,
 		DedupRemovedHashesSuppressed, DedupRemovedHashesForwarded,
-		KVEventStoresSkipped, KVEventRemovalsSkipped,
+		KVEventStoresSkipped, KVEventRemovalsSkipped, KVEventUnknownTagsSkipped,
 		SubscriberActive, SubscriberReconnections, MessagesReceived, ZMQErrors,
 		PoolQueueDepth, PoolCapacity,
 	}
@@ -189,6 +207,23 @@ func CleanupSubscriber(podIdentifier string) {
 	SubscriberReconnections.DeleteLabelValues(podIdentifier)
 	MessagesReceived.DeleteLabelValues(podIdentifier)
 	ZMQErrors.DeletePartialMatch(prometheus.Labels{podIdentifierLabel: podIdentifier})
+}
+
+var unknownEventTagLimiter = metricsutil.NewBoundedLabel(maxUnknownEventTagValues)
+
+// RecordUnknownEventTagSkipped counts one skipped event, bounding the wire-supplied tag label.
+func RecordUnknownEventTagSkipped(engine, tag string) {
+	if len(tag) > maxUnknownEventTagBytes {
+		// A substring would keep the whole wire tag alive in the limiter and the series.
+		tag = strings.Clone(tag[:maxUnknownEventTagBytes])
+	}
+	// After the cut, which can split a rune: WithLabelValues panics on invalid UTF-8.
+	tag = strings.ToValidUTF8(tag, "?")
+	label := metricsutil.OverflowValue
+	if tag != "" {
+		label = unknownEventTagLimiter.Bound(tag)
+	}
+	KVEventUnknownTagsSkipped.WithLabelValues(engine, label).Inc()
 }
 
 var registerMetricsOnce = sync.Once{}

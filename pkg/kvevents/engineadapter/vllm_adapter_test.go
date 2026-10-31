@@ -21,9 +21,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/llm-d/llm-d-router/pkg/kvcache/metrics"
 	"github.com/llm-d/llm-d-router/pkg/kvevents"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
@@ -892,6 +896,256 @@ func TestVLLMParseMessage_TruncatedUnknownEventRejectsBatch(t *testing.T) {
 		Payload: payload.Bytes(),
 	})
 	assert.Error(t, err)
+}
+
+// unknownTagCounts returns every series of the unknown-tag counter, keyed
+// "engine/tag", as read from a registry holding the package's Collectors.
+func unknownTagCounts(t *testing.T) map[string]float64 {
+	t.Helper()
+	registry := prometheus.NewRegistry()
+	registry.MustRegister(metrics.Collectors()...)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+
+	counts := map[string]float64{}
+	for _, family := range families {
+		if family.GetName() != "llm_d_epp_kv_cache_events_unknown_tags_skipped_total" {
+			continue
+		}
+		for _, series := range family.GetMetric() {
+			labels := map[string]string{}
+			for _, label := range series.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			counts[labels["engine"]+"/"+labels["tag"]] = series.GetCounter().GetValue()
+		}
+	}
+	return counts
+}
+
+// TestUnknownEventTagsAreCounted is serial and runs the overflow subtest last:
+// the counter and its tag limit are per process, and the table admits few enough
+// tags to stay under the limit in any iteration order.
+func TestUnknownEventTagsAreCounted(t *testing.T) {
+	stored := []any{"BlockStored", []any{uint64(7)}, nil, []uint32{9}, 1, nil, "GPU", nil, nil}
+	removed := map[string]any{"type": "BlockRemoved", "block_hashes": []any{uint64(5)}, "medium": "GPU"}
+	unknownArray := []any{"BlockInactive", 7, "GPU"}
+	unknownMap := map[string]any{"type": "BlockInactive", "block_hashes": []any{7}}
+
+	batchOf := func(events ...any) []byte {
+		payload, err := msgpack.Marshal([]any{1.0, events, nil})
+		require.NoError(t, err)
+		return payload
+	}
+	message := func(payload []byte) *kvevents.RawMessage {
+		return &kvevents.RawMessage{Topic: "kv@pod-1@m", Payload: payload}
+	}
+	eventTypes := func(batch kvevents.EventBatch) []kvevents.EventType {
+		got := make([]kvevents.EventType, 0, len(batch.Events))
+		for _, ev := range batch.Events {
+			got = append(got, ev.Type())
+		}
+		return got
+	}
+	countsSince := func(t *testing.T, before map[string]float64) map[string]float64 {
+		t.Helper()
+		delta := map[string]float64{}
+		for key, value := range unknownTagCounts(t) {
+			if value != before[key] {
+				delta[key] = value - before[key]
+			}
+		}
+		return delta
+	}
+
+	truncatedPayload := func(writeEvent func(*msgpack.Encoder) error) []byte {
+		var payload bytes.Buffer
+		encoder := msgpack.NewEncoder(&payload)
+		require.NoError(t, encoder.EncodeArrayLen(2))
+		require.NoError(t, encoder.EncodeFloat64(123.0))
+		require.NoError(t, encoder.EncodeArrayLen(1))
+		require.NoError(t, writeEvent(encoder))
+		return payload.Bytes()
+	}
+	truncatedArray := truncatedPayload(func(encoder *msgpack.Encoder) error {
+		if err := encoder.EncodeArrayLen(3); err != nil {
+			return err
+		}
+		return encoder.EncodeString("BlockInactive")
+	})
+	truncatedMap := truncatedPayload(func(encoder *msgpack.Encoder) error {
+		if err := encoder.EncodeMapLen(3); err != nil {
+			return err
+		}
+		if err := encoder.EncodeString("type"); err != nil {
+			return err
+		}
+		return encoder.EncodeString("BlockInactive")
+	})
+
+	removedOnly := []kvevents.EventType{kvevents.EventTypeBlockRemoved}
+	storedAndRemoved := []kvevents.EventType{kvevents.EventTypeBlockStored, kvevents.EventTypeBlockRemoved}
+
+	for name, tc := range map[string]struct {
+		adapter     kvevents.EngineAdapter
+		payload     []byte
+		wantErr     bool
+		wantErrText string
+		wantEvents  []kvevents.EventType
+		wantCounts  map[string]float64
+	}{
+		"known tags are not counted": {
+			adapter: NewVLLMAdapter(),
+			payload: batchOf(stored, removed, []any{"AllBlocksCleared"}),
+			wantEvents: []kvevents.EventType{
+				kvevents.EventTypeBlockStored, kvevents.EventTypeBlockRemoved, kvevents.EventTypeAllBlocksCleared,
+			},
+			wantCounts: map[string]float64{},
+		},
+		"array-form unknown tag is counted and the batch kept": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf(stored, unknownArray, removed),
+			wantEvents: storedAndRemoved,
+			wantCounts: map[string]float64{"vLLM/BlockInactive": 1},
+		},
+		"map-form unknown tag is counted and the batch kept": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf(stored, unknownMap, removed),
+			wantEvents: storedAndRemoved,
+			wantCounts: map[string]float64{"vLLM/BlockInactive": 1},
+		},
+		"array-form invalid UTF-8 tag is counted with a replacement": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf([]any{"\xff\xfe"}, removed),
+			wantEvents: removedOnly,
+			wantCounts: map[string]float64{"vLLM/?": 1},
+		},
+		"map-form invalid UTF-8 tag is counted with a replacement": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf(map[string]any{"type": "\xff\xfe"}, removed),
+			wantEvents: removedOnly,
+			wantCounts: map[string]float64{"vLLM/?": 1},
+		},
+		"long multi-byte tag is cut to valid UTF-8": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf([]any{strings.Repeat("\u65e5", 30)}, removed),
+			wantEvents: removedOnly,
+			wantCounts: map[string]float64{"vLLM/" + strings.Repeat("\u65e5", 21) + "?": 1},
+		},
+		"long ASCII tag is cut to 64 bytes": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf([]any{strings.Repeat("x", 1024)}, removed),
+			wantEvents: removedOnly,
+			wantCounts: map[string]float64{"vLLM/" + strings.Repeat("x", 64): 1},
+		},
+		"empty tag is counted as other": {
+			adapter:    NewVLLMAdapter(),
+			payload:    batchOf([]any{""}, removed),
+			wantEvents: removedOnly,
+			wantCounts: map[string]float64{"vLLM/other": 1},
+		},
+		"truncated array-form unknown event rejects the batch uncounted": {
+			adapter:    NewVLLMAdapter(),
+			payload:    truncatedArray,
+			wantErr:    true,
+			wantCounts: map[string]float64{},
+		},
+		"truncated map-form unknown event rejects the batch uncounted": {
+			adapter:    NewVLLMAdapter(),
+			payload:    truncatedMap,
+			wantErr:    true,
+			wantCounts: map[string]float64{},
+		},
+		"SGLang rejects an array-form unknown tag uncounted": {
+			adapter:     NewSGLangAdapter(),
+			payload:     batchOf(unknownArray),
+			wantErr:     true,
+			wantErrText: "unknown event tag: BlockInactive",
+			wantCounts:  map[string]float64{},
+		},
+		"SGLang rejects a map-form unknown tag uncounted": {
+			adapter:     NewSGLangAdapter(),
+			payload:     batchOf(unknownMap),
+			wantErr:     true,
+			wantErrText: "unknown event tag: BlockInactive",
+			wantCounts:  map[string]float64{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			before := unknownTagCounts(t)
+
+			_, _, batch, err := tc.adapter.ParseMessage(message(tc.payload))
+
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrText)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantEvents, eventTypes(batch))
+			}
+			assert.Equal(t, tc.wantCounts, countsSince(t, before))
+		})
+	}
+
+	t.Run("concurrent parsing counts every skipped event", func(t *testing.T) {
+		adapter := NewVLLMAdapter()
+		before := unknownTagCounts(t)
+		want := map[string]float64{}
+
+		var wg sync.WaitGroup
+		for worker := range 4 {
+			tag := fmt.Sprintf("Concurrent%d", worker)
+			want["vLLM/"+tag] = 100
+			payload := batchOf([]any{tag}, removed)
+			wg.Go(func() {
+				for range 100 {
+					_, _, batch, err := adapter.ParseMessage(message(payload))
+					if assert.NoError(t, err) {
+						assert.Equal(t, removedOnly, eventTypes(batch))
+					}
+				}
+			})
+		}
+		wg.Wait()
+
+		assert.Equal(t, want, countsSince(t, before))
+	})
+
+	t.Run("distinct tags past the limit fold into other", func(t *testing.T) {
+		adapter := NewVLLMAdapter()
+		parse := func(tag string) {
+			t.Helper()
+			_, _, _, err := adapter.ParseMessage(message(batchOf([]any{tag}, removed)))
+			require.NoError(t, err)
+		}
+
+		parse("BlockInactive")
+		before := unknownTagCounts(t)
+		for i := range 256 {
+			parse(fmt.Sprintf("Overflow%03d", i))
+		}
+
+		delta := countsSince(t, before)
+		var total float64
+		for _, count := range delta {
+			total += count
+		}
+		assert.InDelta(t, 256, total, 0, "every skipped event stays counted")
+		assert.Positive(t, delta["vLLM/other"])
+
+		series := 0
+		for key := range unknownTagCounts(t) {
+			if strings.HasPrefix(key, "vLLM/") {
+				series++
+			}
+		}
+		assert.LessOrEqual(t, series, 33, "32 distinct tags plus other")
+
+		before = unknownTagCounts(t)
+		parse("BlockInactive")
+		assert.Equal(t, map[string]float64{"vLLM/BlockInactive": 1}, countsSince(t, before),
+			"an admitted tag keeps its label after the limit fills")
+	})
 }
 
 func TestVLLMParseMessage_StreamAlignment(t *testing.T) {
