@@ -106,6 +106,8 @@ linters:
           alias: fwkk8s
         - pkg: github.com/llm-d/llm-d-router/test/framework/gaie
           alias: fwkgaie
+        - pkg: github.com/llm-d/llm-d-router/test/framework/apix
+          alias: fwkapix
         - pkg: github.com/llm-d/llm-d-router/test/framework/epp
           alias: fwkepp
     nolintlint:

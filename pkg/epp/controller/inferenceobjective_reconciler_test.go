@@ -42,54 +42,55 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/datastore"
 	poolutil "github.com/llm-d/llm-d-router/pkg/epp/util/pool"
+	fwkapix "github.com/llm-d/llm-d-router/test/framework/apix"
 	fwkgaie "github.com/llm-d/llm-d-router/test/framework/gaie"
 )
 
 var (
 	inferencePool = fwkgaie.MakeInferencePool("test-pool1").Namespace("ns1").ObjRef()
-	infObjective1 = fwkgaie.MakeInferenceObjective("model1").
+	infObjective1 = fwkapix.MakeInferenceObjective("model1").
 			Namespace(inferencePool.Namespace).
 			Priority(int32(1)).
 			CreationTimestamp(metav1.Unix(1000, 0)).
 			PoolName(inferencePool.Name).
 			PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	infObjective1Pool2 = fwkgaie.MakeInferenceObjective(infObjective1.Name).
+	infObjective1Pool2 = fwkapix.MakeInferenceObjective(infObjective1.Name).
 				Namespace(infObjective1.Namespace).
 				Priority(*infObjective1.Spec.Priority).
 				CreationTimestamp(metav1.Unix(1001, 0)).
 				PoolName("test-pool2").
 				PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	infObjective1Critical = fwkgaie.MakeInferenceObjective(infObjective1.Name).
+	infObjective1Critical = fwkapix.MakeInferenceObjective(infObjective1.Name).
 				Namespace(infObjective1.Namespace).
 				Priority(int32(2)).
 				CreationTimestamp(metav1.Unix(1003, 0)).
 				PoolName(inferencePool.Name).
 				PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	infObjective1Deleted = fwkgaie.MakeInferenceObjective(infObjective1.Name).
+	infObjective1Deleted = fwkapix.MakeInferenceObjective(infObjective1.Name).
 				Namespace(infObjective1.Namespace).
 				CreationTimestamp(metav1.Unix(1004, 0)).
 				DeletionTimestamp().
 				PoolName(inferencePool.Name).
 				PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	infObjective1DiffGroup = fwkgaie.MakeInferenceObjective(infObjective1.Name).
+	infObjective1DiffGroup = fwkapix.MakeInferenceObjective(infObjective1.Name).
 				Namespace(inferencePool.Namespace).
 				Priority(int32(1)).
 				CreationTimestamp(metav1.Unix(1005, 0)).
 				PoolName(inferencePool.Name).
 				PoolGroup(v1alpha2.GroupName).ObjRef()
-	infObjective2 = fwkgaie.MakeInferenceObjective("model2").
+	infObjective2 = fwkapix.MakeInferenceObjective("model2").
 			Namespace(inferencePool.Namespace).
 			CreationTimestamp(metav1.Unix(1000, 0)).
 			PoolName(inferencePool.Name).
 			PoolGroup(routing.InferencePoolAPIGroup).ObjRef()
-	v1ObjectiveHub = fwkgaie.MakeV1InferenceObjective("model1").
+	v1ObjectiveHub = fwkapix.MakeV1InferenceObjective("model1").
 			Namespace(inferencePool.Namespace).
 			Priority(int32(9)).
 			CreationTimestamp(metav1.Unix(1000, 0)).
 			PoolRefs(
 			apixv1.PoolObjectReference{Name: apixv1.ObjectName(inferencePool.Name), Group: apixv1.Group(routing.InferencePoolAPIGroup)},
 		).ObjRef()
-	v1ObjectiveShared = fwkgaie.MakeV1InferenceObjective("shared").
+	v1ObjectiveShared = fwkapix.MakeV1InferenceObjective("shared").
 				Namespace(inferencePool.Namespace).
 				Priority(int32(1)).
 				CreationTimestamp(metav1.Unix(1000, 0)).
@@ -97,13 +98,13 @@ var (
 			apixv1.PoolObjectReference{Name: apixv1.ObjectName(inferencePool.Name), Group: apixv1.Group(routing.InferencePoolAPIGroup)},
 			apixv1.PoolObjectReference{Name: "test-pool2", Group: apixv1.Group(routing.InferencePoolAPIGroup)},
 		).ObjRef()
-	v1ObjectiveSelector = fwkgaie.MakeV1InferenceObjective("selector").
+	v1ObjectiveSelector = fwkapix.MakeV1InferenceObjective("selector").
 				Namespace(inferencePool.Namespace).
 				Priority(int32(1)).
 				CreationTimestamp(metav1.Unix(1000, 0)).
 				PoolSelector(&metav1.LabelSelector{MatchLabels: map[string]string{"tiers": "shared"}}).
 				ObjRef()
-	v1ObjectiveSelectorMiss = fwkgaie.MakeV1InferenceObjective("selector-miss").
+	v1ObjectiveSelectorMiss = fwkapix.MakeV1InferenceObjective("selector-miss").
 				Namespace(inferencePool.Namespace).
 				Priority(int32(1)).
 				CreationTimestamp(metav1.Unix(1000, 0)).
@@ -408,7 +409,7 @@ func TestInferenceObjectivePoolMapping(t *testing.T) {
 	_ = v1alpha2.Install(scheme)
 	_ = apixv1.Install(scheme)
 	_ = v1.Install(scheme)
-	listMiss := fwkgaie.MakeV1InferenceObjective("list-miss").
+	listMiss := fwkapix.MakeV1InferenceObjective("list-miss").
 		Namespace(inferencePool.Namespace).
 		PoolRefs(
 			apixv1.PoolObjectReference{Name: "test-pool2", Group: apixv1.Group(routing.InferencePoolAPIGroup)},
@@ -563,7 +564,7 @@ func TestInferenceObjectiveEventPredicate(t *testing.T) {
 	if !reconciler.eventPredicateV1(v1ObjectiveShared) {
 		t.Error("poolRefs objective for own pool should pass the v1 event predicate")
 	}
-	miss := fwkgaie.MakeV1InferenceObjective("miss").
+	miss := fwkapix.MakeV1InferenceObjective("miss").
 		Namespace(inferencePool.Namespace).
 		PoolRefs(
 			apixv1.PoolObjectReference{Name: "test-pool2", Group: apixv1.Group(routing.InferencePoolAPIGroup)},
@@ -604,7 +605,7 @@ func TestInferenceObjectiveV1Deletion(t *testing.T) {
 	_ = apixv1.Install(scheme)
 	_ = v1.Install(scheme)
 	now := metav1.Now()
-	deleting := fwkgaie.MakeV1InferenceObjective("deleting").
+	deleting := fwkapix.MakeV1InferenceObjective("deleting").
 		Namespace(inferencePool.Namespace).
 		Priority(int32(1)).
 		PoolRefs(
@@ -667,12 +668,12 @@ func TestInferenceObjectiveBandsDefaultUnsetPriority(t *testing.T) {
 	_ = v1alpha2.Install(scheme)
 	_ = apixv1.Install(scheme)
 	_ = v1.Install(scheme)
-	plain := fwkgaie.MakeV1InferenceObjective("plain").
+	plain := fwkapix.MakeV1InferenceObjective("plain").
 		Namespace(inferencePool.Namespace).
 		PoolRefs(
 			apixv1.PoolObjectReference{Name: apixv1.ObjectName(inferencePool.Name), Group: apixv1.Group(routing.InferencePoolAPIGroup)},
 		).ObjRef()
-	prioritized := fwkgaie.MakeV1InferenceObjective("prioritized").
+	prioritized := fwkapix.MakeV1InferenceObjective("prioritized").
 		Namespace(inferencePool.Namespace).
 		Priority(int32(7)).
 		CreationTimestamp(metav1.Unix(1000, 0)).

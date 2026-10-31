@@ -46,6 +46,7 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/mocks"
 	poolutil "github.com/llm-d/llm-d-router/pkg/epp/util/pool"
+	fwkapix "github.com/llm-d/llm-d-router/test/framework/apix"
 	fwkgaie "github.com/llm-d/llm-d-router/test/framework/gaie"
 	fwkk8s "github.com/llm-d/llm-d-router/test/framework/k8s"
 )
@@ -198,14 +199,14 @@ func TestPool(t *testing.T) {
 func TestObjective(t *testing.T) {
 	chatModel := "chat"
 	tsModel := "food-review"
-	model1ts := fwkgaie.MakeV1InferenceObjective("model1").ObjRef()
+	model1ts := fwkapix.MakeV1InferenceObjective("model1").ObjRef()
 	// Same model name as model1ts, different object name.
-	model2ts := fwkgaie.MakeV1InferenceObjective("model2").ObjRef()
+	model2ts := fwkapix.MakeV1InferenceObjective("model2").ObjRef()
 	// Same model name as model1ts, newer timestamp
-	model1tsCritical := fwkgaie.MakeV1InferenceObjective("model1").
+	model1tsCritical := fwkapix.MakeV1InferenceObjective("model1").
 		Priority(2).ObjRef()
 	// Same object name as model2ts, different model name.
-	model2chat := fwkgaie.MakeV1InferenceObjective(model2ts.Name).ObjRef()
+	model2chat := fwkapix.MakeV1InferenceObjective(model2ts.Name).ObjRef()
 
 	tests := []struct {
 		name           string
