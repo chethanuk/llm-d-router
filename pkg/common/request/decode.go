@@ -23,8 +23,7 @@ import (
 
 // DecodeRequestBody parses a JSON object body. Top-level fields named in
 // inspected are decoded to Go values; every other field stays a json.RawMessage
-// so its bytes are forwarded unchanged. encoding/json errors are returned
-// unwrapped for callers that classify them with errors.As.
+// so its bytes are forwarded unchanged.
 func DecodeRequestBody(raw []byte, inspected map[string]struct{}) (map[string]any, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {

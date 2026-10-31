@@ -144,10 +144,22 @@ func TestDecodeRequestBody(t *testing.T) {
 			wantErrAs: new(*json.SyntaxError),
 		},
 		{
-			name:      "rejects a malformed inspected value with a syntax error",
+			name:      "rejects a malformed field value with a syntax error",
 			raw:       `{"stream":tru}`,
 			inspected: ins,
 			wantErrAs: new(*json.SyntaxError),
+		},
+		{
+			name:      "rejects an inspected number outside float64 range with a type error",
+			raw:       `{"stream":1e999}`,
+			inspected: ins,
+			wantErrAs: new(*json.UnmarshalTypeError),
+		},
+		{
+			name:      "keeps an uninspected number outside float64 range raw",
+			raw:       `{"other":1e999}`,
+			inspected: ins,
+			want:      map[string]any{"other": json.RawMessage(`1e999`)},
 		},
 	}
 
