@@ -145,7 +145,7 @@ func TestDecodeRequestBody(t *testing.T) {
 		},
 		{
 			name:      "rejects a malformed field value with a syntax error",
-			raw:       `{"stream":tru}`,
+			raw:       `{"stream":x}`,
 			inspected: ins,
 			wantErrAs: new(*json.SyntaxError),
 		},
