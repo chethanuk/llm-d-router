@@ -34,3 +34,21 @@ Example:
 ```
 
 Trace fields are omitted when no valid span is active.
+
+## Compatibility
+
+Releases before v0.11.0 wrote `level` and `msg`. From v0.11.0 the fields
+are `severity_text`, `severity_number` and `body`, and verbosity maps as
+follows (Zap level `-n` is logr `V(n)`):
+
+| logr verbosity | `level` before v0.11.0 | `severity_text` / `severity_number` now |
+| --- | --- | --- |
+| `V(0)` | `info` | `INFO` / 9 |
+| `V(1)` to `V(3)`, including the default `V(2)` | `info` | `DEBUG` / 5 |
+| `V(4)` | `debug` | `DEBUG` / 5 |
+| `V(5)` and above | `trace` | `DEBUG` / 5 |
+
+A collector filter or alert on `severity_text == "INFO"` or
+`severity_number >= 9` therefore no longer matches `V(1)` to `V(3)`
+records. Use `severity_number >= 5` to keep them. Warnings and errors are
+unchanged.
