@@ -256,7 +256,7 @@ func completeGRPCFrames(ctx context.Context, reqCtx *RequestContext, chunk []byt
 		if uint64(len(data)-end) < frameLen {
 			break
 		}
-		end += int(frameLen)
+		end += fwkrequest.GRPCFrameHeaderLen + int(msgLen)
 	}
 	if endOfStream {
 		return data
