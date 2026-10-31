@@ -105,6 +105,11 @@ Client-derived label values are cardinality-bounded on EPP metrics that use them
 `target_model_name` from the request body share a cap of 1000 distinct values. Model names configured
 through InferenceModelRewrite rules never fold to `other`.
 
+The `tag` label on `llm_d_epp_kv_cache_events_unknown_tags_skipped_total` comes from engine events. It
+keeps 32 distinct values per process, then folds to `other`, and long values are cut to 64 bytes. A
+non-zero rate is normal because vLLM sends tags the router does not decode, such as `BlockInactive`.
+A skipped tag can still matter to the index, so read the rate per `tag`.
+
 The `fairness_id` label, populated from the `x-llm-d-inference-fairness-id` header or an agent
 identity, has a cap that defaults to 1000 distinct values. Configure it with
 `--fairness-id-metric-label-limit`; setting it to 0 collapses every `fairness_id` to `other`. Caps
@@ -910,6 +915,7 @@ use the labels shown below.
 | `llm_d_epp_kv_cache_events_dedup_removed_hashes_forwarded_total` | Counter | - | Deduplicated removal hashes forwarded. |
 | `llm_d_epp_kv_cache_events_stores_skipped_total` | Counter | `cache_kind`, `reason` | KV store events skipped before prefix indexing. |
 | `llm_d_epp_kv_cache_events_removals_skipped_total` | Counter | `cache_kind`, `reason` | KV removal events skipped before prefix indexing. |
+| `llm_d_epp_kv_cache_events_unknown_tags_skipped_total` | Counter | `engine`, `tag` | Engine events skipped because the adapter does not know their tag. |
 | `llm_d_epp_kv_cache_events_active_subscribers` | Gauge | - | ZMQ subscribers currently managed. |
 | `llm_d_epp_kv_cache_events_subscriber_reconnections_total` | Counter | `pod_identifier` | ZMQ subscriber reconnection attempts. |
 | `llm_d_epp_kv_cache_events_messages_received_total` | Counter | `pod_identifier` | Messages received from ZMQ subscribers. |

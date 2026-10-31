@@ -27,6 +27,7 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 	"github.com/vmihailenco/msgpack/v5/msgpcode"
 
+	"github.com/llm-d/llm-d-router/pkg/kvcache/metrics"
 	"github.com/llm-d/llm-d-router/pkg/kvevents"
 )
 
@@ -188,6 +189,7 @@ func decodeArrayTypedEvent(dec *msgpack.Decoder, schema *eventWireSchema) (kveve
 		if err := skipFields(dec, fieldCount-1); err != nil {
 			return nil, err
 		}
+		metrics.RecordUnknownEventTagSkipped(schema.name, tag)
 		return nil, errUnknownTypedEventTag
 	}
 }
@@ -450,6 +452,7 @@ func decodeMapTypedEvent(dec *msgpack.Decoder, schema *eventWireSchema) (kvevent
 		if !schema.skipUnknownTags {
 			return nil, fmt.Errorf("%s: %s", schema.unknownTagPrefix, fields.tag)
 		}
+		metrics.RecordUnknownEventTagSkipped(schema.name, fields.tag)
 		return nil, errUnknownTypedEventTag
 	}
 }

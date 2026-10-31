@@ -17,6 +17,7 @@ limitations under the License.
 package engineadapter //nolint:testpackage // Benchmarks access unexported functions
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -239,6 +240,42 @@ func BenchmarkParseMessage_Batch(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				_, _, _, err := adapter.ParseMessage(msg)
 				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkParseMessage_UnknownTagBatch benchmarks a batch of only skipped events.
+func BenchmarkParseMessage_UnknownTagBatch(b *testing.B) {
+	adapter := NewVLLMAdapter()
+
+	for _, sc := range []struct {
+		name  string
+		event any
+	}{
+		{"array", []any{"BlockInactive", []any{uint64(7)}, "GPU"}},
+		{"map", map[string]any{"type": "BlockInactive", "block_hashes": []any{uint64(7)}, "medium": "GPU"}},
+	} {
+		b.Run(sc.name, func(b *testing.B) {
+			events := make([]any, 64)
+			for i := range events {
+				events[i] = sc.event
+			}
+			var payload bytes.Buffer
+			encoder := msgpack.NewEncoder(&payload)
+			// Allocations in the map form depend on key order.
+			encoder.SetSortMapKeys(true)
+			if err := encoder.Encode([]any{1.0, events, nil}); err != nil {
+				b.Fatal(err)
+			}
+			msg := &kvevents.RawMessage{Topic: "kv@pod-1@m", Payload: payload.Bytes()}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, _, _, err := adapter.ParseMessage(msg); err != nil {
 					b.Fatal(err)
 				}
 			}
