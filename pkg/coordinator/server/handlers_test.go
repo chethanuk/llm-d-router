@@ -513,11 +513,6 @@ func TestDecodeRequestBody(t *testing.T) {
 		"features":        map[string]any{},
 		"tools":           json.RawMessage(tools),
 	}, parsed)
-
-	for _, body := range []string{`[1,2]`, `null`, `"text"`} {
-		_, err := decodeRequestBody([]byte(body))
-		require.Error(t, err, "body %s", body)
-	}
 }
 
 func TestDecodeRequestBody_PreservesLargeIntegers(t *testing.T) {

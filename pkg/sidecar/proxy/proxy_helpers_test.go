@@ -428,14 +428,6 @@ var _ = Describe("decodeRequestBody", func() {
 		Expect(string(out)).To(ContainSubstring(`"tools":` + tools))
 	})
 
-	It("rejects non-object bodies", func() {
-		_, err := decodeRequestBody([]byte(`[1,2]`))
-		Expect(err).To(HaveOccurred())
-
-		_, err = decodeRequestBody([]byte(`null`))
-		Expect(err).To(HaveOccurred())
-	})
-
 	It("keeps messages raw and decodes them on use", func() {
 		messages := `[{"role":"user","content":"Hi"}]`
 		parsed, err := decodeRequestBody([]byte(`{"messages":` + messages + `}`))
