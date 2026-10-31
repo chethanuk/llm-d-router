@@ -236,8 +236,9 @@ func completeGRPCFrames(ctx context.Context, reqCtx *RequestContext, chunk []byt
 		return chunk
 	}
 	// Appending grows the carry in place, keeping a frame spread over many chunks linear.
-	data := append(reqCtx.grpcFrameCarry, chunk...)
+	data := reqCtx.grpcFrameCarry
 	reqCtx.grpcFrameCarry = nil
+	data = append(data, chunk...)
 	end := 0
 	for len(data)-end >= fwkrequest.GRPCFrameHeaderLen {
 		if data[end] == 1 {

@@ -45,9 +45,7 @@ func grpcTestFrame(t *testing.T, msg proto.Message) []byte {
 	t.Helper()
 	payload, err := proto.Marshal(msg)
 	require.NoError(t, err)
-	header := make([]byte, 5)
-	binary.BigEndian.PutUint32(header[1:], uint32(len(payload)))
-	return append(header, payload...)
+	return append(binary.BigEndian.AppendUint32([]byte{0}, uint32(len(payload))), payload...)
 }
 
 func grpcChunkMsg(prompt, completion, cached uint32) *pb.GenerateResponse {
@@ -79,6 +77,7 @@ func grpcDoneOfSize(t *testing.T, size int) []byte {
 type grpcRun struct {
 	usage          fwkrh.Usage
 	oversizedLogs  int
+	parseErrors    int
 	carryBeforeEnd int
 }
 
@@ -90,6 +89,9 @@ func feedGRPCResponse(t *testing.T, parser fwkrh.Parser, contentType string, chu
 	ctx := log.IntoContext(context.Background(), funcr.New(func(_, args string) {
 		if strings.Contains(args, "oversized gRPC message") {
 			run.oversizedLogs++
+		}
+		if strings.Contains(args, "parsing response") {
+			run.parseErrors++
 		}
 	}, funcr.Options{Verbosity: 10}))
 	headers := map[string]string{}
@@ -142,8 +144,8 @@ func TestGRPCUsageIndependentOfChunkBoundaries(t *testing.T) {
 		},
 		{
 			name:   "later frame without usage keeps usage",
-			frames: []proto.Message{grpcCompleteMsg(7, 3, 3, "stop"), grpcChunkMsg(0, 0, 0)},
-			want:   want{7, 3, 10, 3},
+			frames: []proto.Message{grpcCompleteMsg(9, 3, 3, "stop"), grpcChunkMsg(0, 0, 0)},
+			want:   want{9, 3, 12, 3},
 		},
 		{
 			name:   "embed response",
@@ -204,7 +206,7 @@ func TestGRPCFramesSplitAcrossChunks(t *testing.T) {
 	})
 	t.Run("three frames delivered a byte at a time", func(t *testing.T) {
 		whole := slices.Concat(noUsage, noUsage, done)
-		var chunks [][]byte
+		chunks := make([][]byte, 0, len(whole))
 		for i := range whole {
 			chunks = append(chunks, whole[i:i+1])
 		}
@@ -240,6 +242,7 @@ func TestGRPCPartialFrameAtEndOfStream(t *testing.T) {
 			assert.Equal(t, tt.wantCompletion, run.usage.CompletionTokens)
 			assert.Equal(t, tt.wantCarried, run.carryBeforeEnd)
 			assert.Zero(t, run.oversizedLogs)
+			assert.Equal(t, 1, run.parseErrors, "the parser reports the partial frame")
 		})
 	}
 }
@@ -265,6 +268,11 @@ func TestGRPCCarryCap(t *testing.T) {
 		{
 			name:     "message one byte over the cap stops parsing",
 			chunks:   [][]byte{over[:100], over[100:]},
+			wantLogs: 1,
+		},
+		{
+			name:     "whole message one byte over the cap in a non-final chunk stops parsing",
+			chunks:   [][]byte{over, done},
 			wantLogs: 1,
 		},
 		{
@@ -318,12 +326,18 @@ func TestGRPCCompressedFrames(t *testing.T) {
 	done := grpcTestFrame(t, grpcCompleteMsg(7, 10, 0, "stop"))
 	compressed := []byte{1, 0, 0, 0, 1, 9}
 	tests := []struct {
-		name   string
-		chunks [][]byte
+		name            string
+		chunks          [][]byte
+		wantParseErrors int
 	}{
-		{name: "compressed frame sharing a chunk keeps earlier usage", chunks: [][]byte{slices.Concat(done, compressed)}},
-		{name: "chunks after a split compressed header reach the parser", chunks: [][]byte{compressed[:3], compressed[3:], done}},
-		{name: "chunks after a compressed message that continues reach the parser", chunks: [][]byte{{1, 0, 0, 0, 200, 9}, done}},
+		{name: "compressed frame sharing a chunk keeps earlier usage", chunks: [][]byte{slices.Concat(done, compressed)}, wantParseErrors: 1},
+		{name: "chunks after a split compressed header reach the parser", chunks: [][]byte{compressed[:3], compressed[3:], done}, wantParseErrors: 1},
+		{name: "chunks after a compressed message that continues reach the parser", chunks: [][]byte{{1, 0, 0, 0, 200, 9}, done}, wantParseErrors: 1},
+		{
+			name:            "compressed continuation reading as an oversized header does not stop parsing",
+			chunks:          [][]byte{{1, 0, 0, 0, 12, 9}, {0, 0xff, 0xff, 0xff, 0xff, 1, 2, 3, 4, 5, 6}, done},
+			wantParseErrors: 2,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -331,6 +345,7 @@ func TestGRPCCompressedFrames(t *testing.T) {
 			assert.Equal(t, 7, run.usage.PromptTokens)
 			assert.Equal(t, 10, run.usage.CompletionTokens)
 			assert.Zero(t, run.oversizedLogs)
+			assert.Equal(t, tt.wantParseErrors, run.parseErrors)
 			assert.Zero(t, run.carryBeforeEnd)
 		})
 	}
