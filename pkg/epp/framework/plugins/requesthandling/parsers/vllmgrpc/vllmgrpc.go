@@ -18,6 +18,7 @@ limitations under the License.
 package vllmgrpc
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,10 +133,8 @@ func (p *VllmGRPCParser) ParseRequest(ctx context.Context, body []byte, headers 
 	}
 }
 
-// ParseResponse parses the response body and returns a ParsedResponse
+// ParseResponse parses every gRPC frame in the body, returning usage from the readable ones with an error naming the rest.
 func (p *VllmGRPCParser) ParseResponse(ctx context.Context, body []byte, headers map[string]string, endofStream bool) (*fwkrh.ParsedResponse, error) {
-	logger := log.FromContext(ctx)
-
 	// The handler calls the parser once more with an empty body when a gRPC
 	// stream ends on its trailer. There is no frame to read, so report no usage
 	// rather than a parse error that would be logged on every completed stream.
@@ -143,13 +142,39 @@ func (p *VllmGRPCParser) ParseResponse(ctx context.Context, body []byte, headers
 		return &fwkrh.ParsedResponse{}, nil
 	}
 
+	payloads, err := grpcutil.ParseGrpcPayloads(body)
+	errs := []error{err}
+	result := &fwkrh.ParsedResponse{}
+	var usage fwkrh.Usage
+	for _, payload := range payloads {
+		parsed, err := parseResponseFrame(ctx, payload)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if u := parsed.Usage; u != nil {
+			// Same per-field rule as the handler's mergeUsage, so usage does not depend on chunk boundaries.
+			usage = fwkrh.Usage{
+				PromptTokens:       cmp.Or(u.PromptTokens, usage.PromptTokens),
+				CompletionTokens:   cmp.Or(u.CompletionTokens, usage.CompletionTokens),
+				PromptTokenDetails: cmp.Or(u.PromptTokenDetails, usage.PromptTokenDetails),
+			}
+			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			result.Usage = &usage
+		}
+	}
+	return result, errors.Join(errs...)
+}
+
+func parseResponseFrame(ctx context.Context, payload []byte) (*fwkrh.ParsedResponse, error) {
+	logger := log.FromContext(ctx)
 	resp := &pb.GenerateResponse{}
 
 	// Try to parse as GenerateResponse first. If it fails or the response field is nil,
 	// try to parse as EmbedResponse.
-	if err := toGenerateResponse(body, resp); err != nil || resp.Response == nil {
+	if err := proto.Unmarshal(payload, resp); err != nil || resp.Response == nil {
 		embedResp := &pb.EmbedResponse{}
-		if err := toEmbedResponse(body, embedResp); err == nil && (len(embedResp.Embedding) > 0 || embedResp.PromptTokens > 0) {
+		if err := proto.Unmarshal(payload, embedResp); err == nil && (len(embedResp.Embedding) > 0 || embedResp.PromptTokens > 0) {
 			logger.V(logutil.DEBUG).Info("parsed EmbedResponse", "promptTokens", embedResp.PromptTokens)
 			result := &fwkrh.ParsedResponse{}
 			if embedResp.PromptTokens > 0 {
@@ -200,14 +225,6 @@ func requestControlUsage(promptToken, completionToken, cachedToken int) *fwkrh.U
 			CachedTokens: cachedToken,
 		},
 	}
-}
-
-func toGenerateResponse(payload []byte, resp *pb.GenerateResponse) error {
-	parsedPayload, err := grpcutil.ParseGrpcPayload(payload)
-	if err != nil {
-		return err
-	}
-	return proto.Unmarshal(parsedPayload, resp)
 }
 
 func convertToInferenceRequestBody(pbReq *pb.GenerateRequest) (*fwkrh.InferenceRequestBody, error) {
@@ -303,12 +320,4 @@ func convertEmbedToInferenceRequestBody(pbReq *pb.EmbedRequest) (*fwkrh.Inferenc
 		return nil, errors.New("missing tokenized input in EmbedRequest")
 	}
 	return body, nil
-}
-
-func toEmbedResponse(payload []byte, resp *pb.EmbedResponse) error {
-	parsedPayload, err := grpcutil.ParseGrpcPayload(payload)
-	if err != nil {
-		return err
-	}
-	return proto.Unmarshal(parsedPayload, resp)
 }
