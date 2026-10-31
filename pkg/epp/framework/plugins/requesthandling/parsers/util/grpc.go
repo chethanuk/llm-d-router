@@ -20,10 +20,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-)
 
-const (
-	gRPCPayloadHeaderLen = 5
+	fwkrequest "github.com/llm-d/llm-d-router/pkg/epp/framework/common/request"
 )
 
 // ParseGrpcPayload extracts the message payload from a gRPC frame.
@@ -31,8 +29,8 @@ const (
 // and the actual message payload.
 // It returns an error if the payload is compressed.
 func ParseGrpcPayload(data []byte) ([]byte, error) {
-	if len(data) < gRPCPayloadHeaderLen {
-		return nil, fmt.Errorf("invalid gRPC frame: expected at least %d bytes for header, got %d", gRPCPayloadHeaderLen, len(data))
+	if len(data) < fwkrequest.GRPCFrameHeaderLen {
+		return nil, fmt.Errorf("invalid gRPC frame: expected at least %d bytes for header, got %d", fwkrequest.GRPCFrameHeaderLen, len(data))
 	}
 
 	isCompressed := data[0] == 1
@@ -42,13 +40,13 @@ func ParseGrpcPayload(data []byte) ([]byte, error) {
 	}
 	msgLen := binary.BigEndian.Uint32(data[1:5])
 
-	// Compare in uint64 so gRPCPayloadHeaderLen+msgLen cannot overflow when
+	// Compare in uint64 so fwkrequest.GRPCFrameHeaderLen+msgLen cannot overflow when
 	// msgLen is near math.MaxUint32, which would wrap the check and let the
 	// slice below panic with an out-of-range low>high index.
-	if uint64(len(data)) < uint64(gRPCPayloadHeaderLen)+uint64(msgLen) {
-		return nil, fmt.Errorf("incomplete gRPC payload: header indicates %d bytes, but only %d bytes are available", msgLen, len(data)-gRPCPayloadHeaderLen)
+	if uint64(len(data)) < uint64(fwkrequest.GRPCFrameHeaderLen)+uint64(msgLen) {
+		return nil, fmt.Errorf("incomplete gRPC payload: header indicates %d bytes, but only %d bytes are available", msgLen, len(data)-fwkrequest.GRPCFrameHeaderLen)
 	}
-	return data[gRPCPayloadHeaderLen : gRPCPayloadHeaderLen+msgLen], nil
+	return data[fwkrequest.GRPCFrameHeaderLen : fwkrequest.GRPCFrameHeaderLen+msgLen], nil
 }
 
 // ParseGrpcPayloads extracts the message payload of every gRPC frame in data.
@@ -63,7 +61,7 @@ func ParseGrpcPayloads(data []byte) ([][]byte, error) {
 			return payloads, err
 		}
 		payloads = append(payloads, payload)
-		data = data[gRPCPayloadHeaderLen+len(payload):]
+		data = data[fwkrequest.GRPCFrameHeaderLen+len(payload):]
 	}
 	return payloads, nil
 }
