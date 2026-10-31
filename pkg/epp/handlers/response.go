@@ -20,6 +20,7 @@ package handlers
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"strconv"
 	"strings"
 	"time"
@@ -80,6 +81,8 @@ func (s *StreamingServer) HandleResponseBody(ctx context.Context, reqCtx *Reques
 	parseBytes := responseBytes
 	if isEventStream(reqCtx.Response.Headers[reqcommon.HeaderContentType]) {
 		parseBytes = completeSSELines(ctx, reqCtx, responseBytes, endOfStream)
+	} else if isGRPC(reqCtx.Response.Headers[reqcommon.HeaderContentType]) {
+		parseBytes = completeGRPCFrames(ctx, reqCtx, responseBytes, endOfStream)
 	}
 	parser, err := s.getOrResolveParser(reqCtx)
 	if err != nil {
@@ -209,6 +212,57 @@ func dropSSELine(ctx context.Context, reqCtx *RequestContext, endOfStream bool) 
 
 func logSSELineDrop(ctx context.Context) {
 	log.FromContext(ctx).V(logutil.DEFAULT).Info("dropping oversized SSE line from response parsing", "limit", maxSSELineBytes)
+}
+
+// maxGRPCMessageBytes caps a streamed gRPC message at the default gRPC max, since its claimed length comes off the wire.
+const maxGRPCMessageBytes = 4 << 20
+
+const mediaTypeGRPC = "application/grpc"
+
+// isGRPC excludes application/grpc-web, whose trailer frames and text variant this framing does not fit.
+func isGRPC(contentType string) bool {
+	mediaType, _, _ := strings.Cut(contentType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return mediaType == mediaTypeGRPC || strings.HasPrefix(mediaType, mediaTypeGRPC+"+")
+}
+
+// completeGRPCFrames returns the whole gRPC frames available, carrying a partial last frame to
+// the next chunk. At end of stream a partial goes to the parser, which reports it.
+func completeGRPCFrames(ctx context.Context, reqCtx *RequestContext, chunk []byte, endOfStream bool) []byte {
+	if reqCtx.grpcFrameDropped {
+		return nil
+	}
+	if reqCtx.grpcFramePassthrough {
+		return chunk
+	}
+	// Appending grows the carry in place, keeping a frame spread over many chunks linear.
+	data := reqCtx.grpcFrameCarry
+	reqCtx.grpcFrameCarry = nil
+	data = append(data, chunk...)
+	end := 0
+	for len(data)-end >= fwkrequest.GRPCFrameHeaderLen {
+		if data[end] == 1 {
+			// The parser rejects compressed frames, so later chunks reach it as they arrive.
+			reqCtx.grpcFramePassthrough = true
+			return data
+		}
+		msgLen := binary.BigEndian.Uint32(data[end+1 : end+fwkrequest.GRPCFrameHeaderLen])
+		if msgLen > maxGRPCMessageBytes && !endOfStream {
+			log.FromContext(ctx).V(logutil.DEFAULT).Info("stopping response usage parsing on an oversized gRPC message", "limit", maxGRPCMessageBytes)
+			reqCtx.grpcFrameDropped = true
+			return data[:end]
+		}
+		frameLen := fwkrequest.GRPCFrameHeaderLen + uint64(msgLen)
+		if uint64(len(data)-end) < frameLen {
+			break
+		}
+		end += fwkrequest.GRPCFrameHeaderLen + int(msgLen)
+	}
+	if endOfStream {
+		return data
+	}
+	reqCtx.grpcFrameCarry = data[end:]
+	return data[:end]
 }
 
 // mergeUsage folds a parsed usage block into the usage accumulated for the request.

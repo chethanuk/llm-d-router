@@ -183,6 +183,11 @@ type RequestContext struct {
 	sseLineCarry      []byte
 	sseLineDiscarding bool
 
+	// grpcFrameCarry is the partial last gRPC frame of the previous response chunk.
+	grpcFrameCarry []byte
+	// grpcFramePassthrough stops carrying after a compressed frame, grpcFrameDropped stops usage parsing after an oversized message.
+	grpcFramePassthrough, grpcFrameDropped bool
+
 	toolCallingSurface             reqcommon.APIType
 	toolCallingRequest             bool
 	toolCallingResponseEventStream bool

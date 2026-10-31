@@ -23,6 +23,8 @@ const (
 	// MediaTypeEventStream is the base media type for Server-Sent Events, without
 	// the optional parameters a server may append (for example "; charset=utf-8").
 	MediaTypeEventStream = "text/event-stream"
+	// GRPCFrameHeaderLen is the flag byte plus the 4-byte big-endian message length of a gRPC frame.
+	GRPCFrameHeaderLen = 5
 )
 
 // GetRequestPath extracts the request path from headers with fallback priority.
