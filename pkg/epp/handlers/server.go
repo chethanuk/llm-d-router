@@ -185,7 +185,7 @@ type RequestContext struct {
 
 	// grpcFrameCarry is the partial last gRPC frame of the previous response chunk.
 	grpcFrameCarry []byte
-	// grpcFramePassthrough stops carrying after a compressed frame, grpcFrameDropped stops usage parsing after an oversized message.
+	// grpcFramePassthrough stops carrying after a compressed frame, grpcFrameDropped stops usage parsing after an oversized partial message.
 	grpcFramePassthrough, grpcFrameDropped bool
 
 	toolCallingSurface             reqcommon.APIType

@@ -214,7 +214,7 @@ func logSSELineDrop(ctx context.Context) {
 	log.FromContext(ctx).V(logutil.DEFAULT).Info("dropping oversized SSE line from response parsing", "limit", maxSSELineBytes)
 }
 
-// maxGRPCMessageBytes caps a streamed gRPC message at the default gRPC max, since its claimed length comes off the wire.
+// maxGRPCMessageBytes caps a gRPC message carried to the next chunk at the default gRPC max, since its claimed length comes off the wire.
 const maxGRPCMessageBytes = 4 << 20
 
 const mediaTypeGRPC = "application/grpc"
@@ -247,13 +247,13 @@ func completeGRPCFrames(ctx context.Context, reqCtx *RequestContext, chunk []byt
 			return data
 		}
 		msgLen := binary.BigEndian.Uint32(data[end+1 : end+fwkrequest.GRPCFrameHeaderLen])
-		if msgLen > maxGRPCMessageBytes && !endOfStream {
-			log.FromContext(ctx).V(logutil.DEFAULT).Info("stopping response usage parsing on an oversized gRPC message", "limit", maxGRPCMessageBytes)
-			reqCtx.grpcFrameDropped = true
-			return data[:end]
-		}
 		frameLen := fwkrequest.GRPCFrameHeaderLen + uint64(msgLen)
 		if uint64(len(data)-end) < frameLen {
+			if msgLen > maxGRPCMessageBytes && !endOfStream {
+				log.FromContext(ctx).V(logutil.DEFAULT).Info("stopping response usage parsing on an oversized gRPC message", "limit", maxGRPCMessageBytes)
+				reqCtx.grpcFrameDropped = true
+				return data[:end]
+			}
 			break
 		}
 		end += fwkrequest.GRPCFrameHeaderLen + int(msgLen)

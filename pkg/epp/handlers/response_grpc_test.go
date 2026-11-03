@@ -271,9 +271,9 @@ func TestGRPCCarryCap(t *testing.T) {
 			wantLogs: 1,
 		},
 		{
-			name:     "whole message one byte over the cap in a non-final chunk stops parsing",
-			chunks:   [][]byte{over, done},
-			wantLogs: 1,
+			name:           "whole message one byte over the cap in a non-final chunk parses",
+			chunks:         [][]byte{over, done},
+			wantCompletion: 10,
 		},
 		{
 			name:     "oversized claim split inside the header stops parsing",
@@ -417,6 +417,7 @@ func TestProcessRecordsGRPCUsageAndForwardsBytesUnchanged(t *testing.T) {
 		ResponseTrailers: &extProcPb.HttpTrailers{Trailers: &configPb.HeaderMap{}},
 	}}
 	withPartial := slices.Concat(done, noUsage[:3])
+	over := grpcDoneOfSize(t, grpcTestCap+1)
 
 	tests := []struct {
 		name     string
@@ -443,6 +444,11 @@ func TestProcessRecordsGRPCUsageAndForwardsBytesUnchanged(t *testing.T) {
 			messages: []*extProcPb.ProcessingRequest{grpcRespBody(withPartial, false), trailers},
 			upstream: withPartial,
 		},
+		{
+			name:     "whole message over the cap, ends on trailers",
+			messages: []*extProcPb.ProcessingRequest{grpcRespBody(over, false), trailers},
+			upstream: over,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -462,7 +468,9 @@ func TestProcessRecordsGRPCUsageAndForwardsBytesUnchanged(t *testing.T) {
 
 			require.NoError(t, NewStreamingServer(nil, director, registry, 0).Process(srv))
 
+			assert.Equal(t, 7, director.usage.PromptTokens)
 			assert.Equal(t, 10, director.usage.CompletionTokens)
+			assert.Equal(t, 17, director.usage.TotalTokens)
 			var forwarded []byte
 			for _, sent := range srv.sentResponses {
 				forwarded = append(forwarded, sent.GetResponseBody().GetResponse().GetBodyMutation().GetStreamedResponse().GetBody()...)
