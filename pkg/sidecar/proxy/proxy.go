@@ -254,14 +254,14 @@ func (c Config) String() string {
 // absent); the APIType selects the fields that cap the prefill request.
 type pdConnectorHandler func(http.ResponseWriter, *http.Request, string, string, reqcommon.APIType)
 
-type ecConnectorHandler func(http.ResponseWriter, *http.Request, string, []string, reqcommon.APIType)
+type ecConnectorHandler func(http.ResponseWriter, *http.Request, string, []string, string, reqcommon.APIType)
 
 // Server is the reverse proxy server
 type Server struct {
 	logger             logr.Logger
 	addr               net.Addr      // the proxy TCP address
 	readyCh            chan struct{} // closed once addr is set and server is listening
-	handler            http.Handler  // the handler function. either a Mux or a proxy
+	handler            http.Handler  // the routes built by createRoutes
 	allowlistValidator *AllowlistValidator
 	handlePDConnector  pdConnectorHandler // handles the Prefiller-Decoder connector request
 	handleECConnector  ecConnectorHandler // handles the Encoder disaggregation connector request.
@@ -568,7 +568,7 @@ func (s *Server) setECConnector() {
 	}
 }
 
-func (s *Server) createRoutes() *http.ServeMux {
+func (s *Server) createRoutes() http.Handler {
 	// Configure handlers
 	mux := http.NewServeMux()
 
@@ -593,7 +593,7 @@ func (s *Server) createRoutes() *http.ServeMux {
 
 	mux.Handle("/", s.decoderProxy)
 
-	return mux
+	return redirectEncodedInferencePath(mux)
 }
 
 // createProxyHandler creates a reverse proxy handler for the given host:port.
