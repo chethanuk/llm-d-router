@@ -1285,3 +1285,18 @@ for c in "sidecar:${envoy_default_output}:--concurrency:8:1" "sidecar-cpuset:${e
     exit 1
   fi
 done
+
+echo "Verifying llm-d-router-standalone Envoy stdout access logs..."
+# Both stdout access logs must use json_format; a text_format with a literal "..." emits invalid JSON (#4204).
+# want stdout-logs:json-format-logs:inline-strings-with-"..." = 2:2:0
+for c in "sidecar:${envoy_default_output}" "service:${proxy_service_render_output}"; do
+  IFS=: read -r name file <<< "${c}"
+  got=$(${YQ} 'select(.kind == "ConfigMap" and (.data | has("envoy.yaml"))) | .data."envoy.yaml"' "${file}" | ${YQ} '
+    ([.. | select(tag == "!!map" and has("access_log")) | .access_log[] | select(.typed_config.path == "/dev/stdout") | .typed_config.log_format]) as $logs |
+    [($logs | length), ($logs | map(select(.json_format.status == "%RESPONSE_CODE%" and .json_format.details == "%RESPONSE_CODE_DETAILS%")) | length),
+     ([.. | select(tag == "!!map" and has("inline_string")) | .inline_string | select(contains("..."))] | length)] | join(":")')
+  if [ "${got}" != "2:2:0" ]; then
+    echo "Envoy stdout access logs for ${name}: got ${got}, want 2:2:0 (stdout logs:json_format logs with status/details:inline_string with \"...\")"
+    exit 1
+  fi
+done
