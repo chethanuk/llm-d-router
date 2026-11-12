@@ -19,6 +19,7 @@ package utilization
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +35,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrmetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/metrics"
 	eppmetrics "github.com/llm-d/llm-d-router/pkg/epp/metrics"
 )
 
@@ -549,6 +551,80 @@ func TestDetector_Filter(t *testing.T) {
 	}
 }
 
+// TestDetector_PerEndpointThresholdAttributes covers queueDepthThresholdAttribute and
+// kvCacheUtilThresholdAttribute: each endpoint is judged against its own published limit.
+func TestDetector_PerEndpointThresholdAttributes(t *testing.T) {
+	t.Parallel()
+
+	// Configured fallback: queue 2, kv 0.5; Filter limits with 50% headroom: queue 3, kv 0.75.
+	const withAttrs = `{"queueDepthThreshold":2,"kvCacheUtilThreshold":0.5,"headroom":0.5,` +
+		`"queueDepthThresholdAttribute":"MaxWaitingRequests","kvCacheUtilThresholdAttribute":"MaxKVCacheUsage"}`
+	const withoutAttrs = `{"queueDepthThreshold":2,"kvCacheUtilThreshold":0.5,"headroom":0.5}`
+	f := func(v float64) *float64 { return &v }
+
+	tests := []struct {
+		name           string
+		config         string
+		qAttr, kvAttr  *float64 // nil = attribute not published
+		queue          int
+		kv             float64
+		wantSaturation float64
+		wantPass       bool // loaded endpoint survives Filter next to an idle one
+	}{
+		{"positive queue limit replaces configured threshold", withAttrs, f(8), nil, 4, 0, 0.5, true},
+		{"headroom multiplies the per-endpoint queue limit", withAttrs, f(4), nil, 5, 0, 1.25, true},
+		{"positive kv limit replaces configured threshold", withAttrs, nil, f(0.8), 0, 0.8, 1.0, true},
+		{"zero queue limit disables the queue check", withAttrs, f(0), nil, 100, 0.25, 0.5, true},
+		{"zero kv limit disables the kv check", withAttrs, nil, f(0), 1, 0.9, 0.5, true},
+		{"missing attributes fall back to configured thresholds", withAttrs, nil, nil, 4, 0.25, 2.0, false},
+		{"negative queue limit falls back", withAttrs, f(-5), nil, 4, 0, 2.0, false},
+		{"NaN queue limit falls back", withAttrs, f(math.NaN()), nil, 4, 0, 2.0, false},
+		{"+Inf queue limit falls back", withAttrs, f(math.Inf(1)), nil, 4, 0, 2.0, false},
+		{"-Inf queue limit falls back", withAttrs, f(math.Inf(-1)), nil, 4, 0, 2.0, false},
+		{"negative kv limit falls back", withAttrs, nil, f(-1), 0, 0.9, 1.8, false},
+		{"NaN kv limit falls back", withAttrs, nil, f(math.NaN()), 0, 0.9, 1.8, false},
+		{"+Inf kv limit falls back", withAttrs, nil, f(math.Inf(1)), 0, 0.9, 1.8, false},
+		{"-Inf kv limit falls back", withAttrs, nil, f(math.Inf(-1)), 0, 0.9, 1.8, false},
+		{"unset params ignore published attributes", withoutAttrs, f(8), f(0), 4, 0.9, 2.0, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			plugin, err := UtilizationDetectorFactory("test-util-detector", fwkplugin.StrictDecoder([]byte(tc.config)),
+				fwkplugin.NewEppHandle(t.Context(), func() []types.NamespacedName { return nil }))
+			require.NoError(t, err)
+			sd, ok := plugin.(flowcontrol.SaturationDetector)
+			require.True(t, ok)
+			filter, ok := plugin.(fwksched.Filter)
+			require.True(t, ok)
+
+			put := func(attrs interface {
+				Put(fwkplugin.DataKey, fwkdl.Cloneable)
+			}) {
+				if tc.qAttr != nil {
+					attrs.Put(attrmetrics.ScalarMetricDataKey("MaxWaitingRequests"), attrmetrics.ScalarMetricValue(*tc.qAttr))
+				}
+				if tc.kvAttr != nil {
+					attrs.Put(attrmetrics.ScalarMetricDataKey("MaxKVCacheUsage"), attrmetrics.ScalarMetricValue(*tc.kvAttr))
+				}
+			}
+
+			now := time.Now()
+			pod := makePodMetric("loaded", tc.queue, tc.kv, now)
+			put(pod.GetAttributes())
+			require.InDelta(t, tc.wantSaturation, sd.Saturation(context.Background(), []fwkdl.Endpoint{pod}), 1e-9)
+
+			loaded := makeSchedulingEndpoint("loaded", tc.queue, tc.kv, now)
+			put(loaded)
+			idle := makeSchedulingEndpoint("idle", 0, 0, now)
+			got := filter.Filter(context.Background(), nil, []fwksched.Endpoint{loaded, idle})
+			require.Equal(t, tc.wantPass, len(got) == 2, "loaded endpoint pass/filter mismatch")
+		})
+	}
+}
+
 // staleGaugeValue reads the llm_d_epp_flow_control_stale_endpoints series for the given detector
 // and stage. It returns -1 when the series is absent.
 func staleGaugeValue(t *testing.T, detectorName, stage string) float64 {
@@ -740,5 +816,46 @@ func TestUtilizationDetectorFactory_StalenessWarning(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.wantWarnings, sink.warnings)
 		})
+	}
+}
+
+// limitLogSink counts the per-endpoint limit log lines.
+type limitLogSink struct{ warnCountingSink }
+
+func (s *limitLogSink) Info(_ int, msg string, _ ...any) {
+	if msg == "Endpoint saturation limits" {
+		s.warnings++
+	}
+}
+func (s *limitLogSink) WithName(string) logr.LogSink { return s }
+
+func TestDetector_PerEndpointLimitsLoggedOnChange(t *testing.T) {
+	t.Parallel()
+
+	sink := &limitLogSink{}
+	detector := NewDetector("test-detector", Config{
+		QueueDepthThreshold:          2,
+		KVCacheUtilThreshold:         0.5,
+		MetricsStalenessThreshold:    time.Minute,
+		QueueDepthThresholdAttribute: "MaxWaitingRequests",
+	}, logr.New(sink))
+	ep := makePodMetric("pod1", 0, 0, time.Now())
+	key := attrmetrics.ScalarMetricDataKey("MaxWaitingRequests")
+
+	steps := []struct {
+		name     string
+		set      func()
+		wantLogs int
+	}{
+		{"first sight logs the configured fallback", func() {}, 1},
+		{"unchanged limits do not log again", func() {}, 1},
+		{"switch to the endpoint's own limit logs", func() { ep.GetAttributes().Put(key, attrmetrics.ScalarMetricValue(8)) }, 2},
+		{"same attribute value does not log", func() {}, 2},
+		{"limit change logs", func() { ep.GetAttributes().Put(key, attrmetrics.ScalarMetricValue(0)) }, 3},
+	}
+	for _, s := range steps {
+		s.set()
+		detector.Saturation(context.Background(), []fwkdl.Endpoint{ep})
+		require.Equal(t, s.wantLogs, sink.warnings, s.name)
 	}
 }

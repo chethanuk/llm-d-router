@@ -124,6 +124,17 @@ type apiConfig struct {
 	// When no such producer is configured the compensation is skipped and the
 	// detector relies solely on the scraped WaitingQueueSize.
 	InFlightLoadProducerName string `json:"inFlightLoadProducerName,omitempty"`
+
+	// QueueDepthThresholdAttribute names a scalar endpoint attribute of the core metrics extractor
+	// (for example a customMetrics entry) that holds the endpoint's own queue depth limit. A
+	// positive value replaces QueueDepthThreshold for that endpoint, 0 disables the queue check
+	// for it, and a missing, negative, NaN or infinite value falls back to QueueDepthThreshold.
+	// Empty (the default) applies QueueDepthThreshold to every endpoint.
+	QueueDepthThresholdAttribute string `json:"queueDepthThresholdAttribute,omitempty"`
+
+	// KVCacheUtilThresholdAttribute is the KV cache counterpart of QueueDepthThresholdAttribute,
+	// falling back to KVCacheUtilThreshold.
+	KVCacheUtilThresholdAttribute string `json:"kvCacheUtilThresholdAttribute,omitempty"`
 }
 
 // Config is the internal, fully-validated configuration used by the detector.
@@ -134,6 +145,10 @@ type Config struct {
 	Headroom                  float64
 	StalenessPolicy           StalenessPolicy
 	InFlightLoadProducerName  string
+	// QueueDepthThresholdAttribute and KVCacheUtilThresholdAttribute name optional per-endpoint
+	// limit attributes; empty disables the lookup.
+	QueueDepthThresholdAttribute  string
+	KVCacheUtilThresholdAttribute string
 }
 
 // buildConfig applies the configuration lifecycle (defaulting and validation) and translates the
@@ -152,12 +167,14 @@ func buildConfig(apiCfg *apiConfig) (*Config, error) {
 	}
 
 	return &Config{
-		QueueDepthThreshold:       *safeCfg.QueueDepthThreshold,
-		KVCacheUtilThreshold:      *safeCfg.KVCacheUtilThreshold,
-		MetricsStalenessThreshold: safeCfg.MetricsStalenessThreshold.Duration,
-		Headroom:                  *safeCfg.Headroom,
-		StalenessPolicy:           *safeCfg.StalenessPolicy,
-		InFlightLoadProducerName:  safeCfg.InFlightLoadProducerName,
+		QueueDepthThreshold:           *safeCfg.QueueDepthThreshold,
+		KVCacheUtilThreshold:          *safeCfg.KVCacheUtilThreshold,
+		MetricsStalenessThreshold:     safeCfg.MetricsStalenessThreshold.Duration,
+		Headroom:                      *safeCfg.Headroom,
+		StalenessPolicy:               *safeCfg.StalenessPolicy,
+		InFlightLoadProducerName:      safeCfg.InFlightLoadProducerName,
+		QueueDepthThresholdAttribute:  safeCfg.QueueDepthThresholdAttribute,
+		KVCacheUtilThresholdAttribute: safeCfg.KVCacheUtilThresholdAttribute,
 	}, nil
 }
 

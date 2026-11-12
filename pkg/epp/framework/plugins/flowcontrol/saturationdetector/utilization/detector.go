@@ -25,6 +25,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +40,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	attrconcurrency "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/concurrency"
+	attrmetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 )
 
@@ -88,7 +92,15 @@ type Detector struct {
 	config              Config
 	typedName           fwkplugin.TypedName
 	inFlightLoadDataKey fwkplugin.DataKey
+	queueLimitDataKey   fwkplugin.DataKey
+	kvLimitDataKey      fwkplugin.DataKey
 	logger              logr.Logger
+
+	// loggedLimits maps an endpoint's NamespacedName string to the endpointLimits last logged for
+	// it, so a limit is logged once per change rather than per evaluation.
+	// shortcut: entries of deleted endpoints are never evicted; bounded by pods seen over the
+	// EPP's lifetime. Evict on endpoint removal if that ever matters.
+	loggedLimits sync.Map
 
 	// lastStaleWarnNanos is the wall-clock time (UnixNano) of the most recent stale-metrics log,
 	// accessed atomically because Saturation may be called concurrently.
@@ -109,7 +121,9 @@ func NewDetector(name string, cfg Config, logger logr.Logger) *Detector {
 		"kvCacheUtilThreshold", cfg.KVCacheUtilThreshold,
 		"metricsStalenessThreshold", cfg.MetricsStalenessThreshold.String(),
 		"stalenessPolicy", cfg.StalenessPolicy,
-		"headroom", cfg.Headroom)
+		"headroom", cfg.Headroom,
+		"queueDepthThresholdAttribute", cfg.QueueDepthThresholdAttribute,
+		"kvCacheUtilThresholdAttribute", cfg.KVCacheUtilThresholdAttribute)
 
 	if cfg.Headroom > 1.0 {
 		pluginLogger.Info("Unusually high headroom configured; verify value is a fraction, not a percentage",
@@ -121,17 +135,85 @@ func NewDetector(name string, cfg Config, logger logr.Logger) *Detector {
 		config:              cfg,
 		typedName:           typedName,
 		inFlightLoadDataKey: attrconcurrency.InFlightLoadDataKey.WithNonEmptyProducerName(cfg.InFlightLoadProducerName),
+		queueLimitDataKey:   attrmetrics.ScalarMetricDataKey(cfg.QueueDepthThresholdAttribute),
+		kvLimitDataKey:      attrmetrics.ScalarMetricDataKey(cfg.KVCacheUtilThresholdAttribute),
 		logger:              pluginLogger,
 	}
 }
 
 // Consumes declares InFlightLoad as an optional dependency: it supplies the
 // scrape-lag compensation in Saturation and Filter, but the detector still functions on
-// scraped metrics alone when no inflight-load-producer is configured.
+// scraped metrics alone when no inflight-load-producer is configured. The per-endpoint limit
+// attributes, when configured, are optional too: endpoints without them use the configured
+// thresholds.
 func (d *Detector) Consumes() fwkplugin.DataDependencies {
-	return fwkplugin.DataDependencies{
-		Optional: map[fwkplugin.DataKey]any{d.inFlightLoadDataKey: attrconcurrency.InFlightLoad{}},
+	optional := map[fwkplugin.DataKey]any{d.inFlightLoadDataKey: attrconcurrency.InFlightLoad{}}
+	if d.config.QueueDepthThresholdAttribute != "" {
+		optional[d.queueLimitDataKey] = attrmetrics.ScalarMetricValue(0)
 	}
+	if d.config.KVCacheUtilThresholdAttribute != "" {
+		optional[d.kvLimitDataKey] = attrmetrics.ScalarMetricValue(0)
+	}
+	return fwkplugin.DataDependencies{Optional: optional}
+}
+
+const (
+	limitSourceConfig    = "config"
+	limitSourceAttribute = "attribute"
+)
+
+// endpointLimits are the ideal (headroom-free) thresholds applied to one endpoint. A limit of
+// +Inf means the endpoint published 0, which disables that check.
+type endpointLimits struct {
+	queue, kv             float64
+	queueSource, kvSource string
+}
+
+// limitsFor resolves the endpoint's queue depth and KV cache limits from its attributes, falling
+// back to the configured thresholds, and logs the first resolution and every change.
+func (d *Detector) limitsFor(meta *datalayer.EndpointMetadata, attrs datalayer.AttributeMap) endpointLimits {
+	var l endpointLimits
+	l.queue, l.queueSource = resolveLimit(attrs, d.config.QueueDepthThresholdAttribute, d.queueLimitDataKey,
+		float64(d.config.QueueDepthThreshold))
+	l.kv, l.kvSource = resolveLimit(attrs, d.config.KVCacheUtilThresholdAttribute, d.kvLimitDataKey,
+		d.config.KVCacheUtilThreshold)
+	if (d.config.QueueDepthThresholdAttribute != "" || d.config.KVCacheUtilThresholdAttribute != "") && meta != nil {
+		id := meta.GetNamespacedName().String()
+		if prev, ok := d.loggedLimits.Load(id); !ok || prev.(endpointLimits) != l {
+			d.loggedLimits.Store(id, l)
+			d.logger.V(logutil.DEFAULT).Info("Endpoint saturation limits",
+				"endpoint", id,
+				"queueDepthLimit", formatLimit(l.queue), "queueDepthLimitSource", l.queueSource,
+				"kvCacheUtilLimit", formatLimit(l.kv), "kvCacheUtilLimitSource", l.kvSource)
+		}
+	}
+	return l
+}
+
+// resolveLimit returns the endpoint's own limit when attrName is set and the attribute holds a
+// usable value: a positive value is the limit and 0 means no limit (+Inf). Anything else
+// (missing, negative, NaN or infinite) falls back to the configured threshold.
+func resolveLimit(attrs datalayer.AttributeMap, attrName string, key fwkplugin.DataKey, fallback float64) (float64, string) {
+	if attrName == "" || attrs == nil {
+		return fallback, limitSourceConfig
+	}
+	v, ok := attrmetrics.ReadScalarMetricValue(attrs, key)
+	f := float64(v)
+	switch {
+	case !ok || f < 0 || math.IsNaN(f) || math.IsInf(f, 0):
+		return fallback, limitSourceConfig
+	case f == 0:
+		return math.Inf(1), limitSourceAttribute
+	default:
+		return f, limitSourceAttribute
+	}
+}
+
+func formatLimit(v float64) string {
+	if math.IsInf(v, 1) {
+		return "none"
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
 // queueDepth returns the scraped waiting queue plus the in-flight requests the
@@ -213,8 +295,9 @@ func (d *Detector) Saturation(ctx context.Context, candidates []datalayer.Endpoi
 			continue
 		}
 
-		qRatio := float64(d.queueDepth(podMetrics, e.GetAttributes())) / float64(d.config.QueueDepthThreshold)
-		kvRatio := podMetrics.KVCacheUsagePercent / d.config.KVCacheUtilThreshold
+		limits := d.limitsFor(e.GetMetadata(), e.GetAttributes())
+		qRatio := float64(d.queueDepth(podMetrics, e.GetAttributes())) / limits.queue
+		kvRatio := podMetrics.KVCacheUsagePercent / limits.kv
 
 		// Roofline Analysis: The pod is saturated if either resource is exhausted.
 		totalScore += max(qRatio, kvRatio)
@@ -266,9 +349,6 @@ func (d *Detector) Filter(
 	_ *fwksched.InferenceRequest,
 	endpoints []fwksched.Endpoint,
 ) []fwksched.Endpoint {
-	qLimit := float64(d.config.QueueDepthThreshold) * (1.0 + d.config.Headroom)
-	kvLimit := d.config.KVCacheUtilThreshold * (1.0 + d.config.Headroom)
-
 	// Pre-allocate assuming most endpoints will pass the filter to minimize allocations.
 	filtered := make([]fwksched.Endpoint, 0, len(endpoints))
 
@@ -278,6 +358,9 @@ func (d *Detector) Filter(
 			continue
 		}
 
+		limits := d.limitsFor(endpoint.GetMetadata(), endpoint)
+		qLimit := limits.queue * (1.0 + d.config.Headroom)
+		kvLimit := limits.kv * (1.0 + d.config.Headroom)
 		if float64(d.queueDepth(podMetrics, endpoint)) < qLimit && podMetrics.KVCacheUsagePercent < kvLimit {
 			filtered = append(filtered, endpoint)
 		}

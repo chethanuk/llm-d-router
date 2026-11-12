@@ -78,6 +78,8 @@ The plugin consumes standard metrics from endpoints:
 
 It optionally consumes the `InFlightLoad` endpoint attribute of an `inflight-load-producer` for the scrape-lag credit.
 
+When `queueDepthThresholdAttribute` or `kvCacheUtilThresholdAttribute` is set, it also optionally consumes that scalar attribute of the `core-metrics-extractor` (for example a `customMetrics` entry).
+
 ## Configuration
 
 The plugin accepts JSON parameters decoding to the following fields:
@@ -88,6 +90,38 @@ The plugin accepts JSON parameters decoding to the following fields:
 - `stalenessPolicy` (`string`): How endpoints with missing or stale metrics contribute to pool saturation: `"saturated"` scores them as fully saturated; `"ignore"` excludes them from the saturation average. (Default: `"saturated"`)
 - `headroom` (`float64`): Allowed burst capacity above the ideal thresholds, expressed as a fraction (e.g., `0.2` for 20%). Must be >= 0.0. (Default: `0.0`)
 - `inFlightLoadProducerName` (`string`): Name of the `inflight-load-producer` whose `InFlightLoad` attribute supplies the scrape-lag credit. Empty selects the default producer. (Default: `""`)
+- `queueDepthThresholdAttribute` (`string`): Name of a scalar endpoint attribute that holds the endpoint's own queue depth limit. (Default: `""`, every endpoint uses `queueDepthThreshold`)
+- `kvCacheUtilThresholdAttribute` (`string`): Name of a scalar endpoint attribute that holds the endpoint's own KV cache utilization limit. (Default: `""`, every endpoint uses `kvCacheUtilThreshold`)
+
+### Per-endpoint thresholds
+
+With a threshold attribute set, `Saturation` and `Filter` compare each endpoint with its own limit. This keeps the limits right while old and new pods with different model server settings share a pool during a rollout, and lets a limit change take effect without an EPP restart.
+
+| Attribute value | Limit used for the endpoint |
+|---|---|
+| Positive number | The value. `headroom` multiplies it in `Filter`, as it does the configured threshold. |
+| `0` | No limit. The detector skips that check for the endpoint. |
+| Missing | `queueDepthThreshold` or `kvCacheUtilThreshold` |
+| Negative, NaN or infinite | `queueDepthThreshold` or `kvCacheUtilThreshold` |
+
+The scrape-lag credit still applies; the corrected queue depth is compared with the endpoint's own limit. The detector logs one line at verbosity 2 when it first sees an endpoint and whenever the endpoint's limits or their source change.
+
+```yaml
+# core-metrics-extractor, engineConfigs[].customMetrics:
+#   - attributeKey: MaxWaitingRequests
+#     metricSpec: "model_server:max_waiting_requests"
+#     optional: true
+#   - attributeKey: MaxKVCacheUsage
+#     metricSpec: "model_server:max_kv_cache_usage"
+#     optional: true
+plugins:
+- type: utilization-detector
+  parameters:
+    queueDepthThreshold: 2
+    kvCacheUtilThreshold: 0.9
+    queueDepthThresholdAttribute: MaxWaitingRequests
+    kvCacheUtilThresholdAttribute: MaxKVCacheUsage
+```
 
 ## Trade-offs
 
