@@ -1,0 +1,36 @@
+# Scratch experiment for llm-d/llm-d-router#4291: does a merge by a token without
+# issues permission auto-close a "Fixes #N" issue? Deleted after the run.
+name: scratch-4291-merge
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        required: true
+      variant:
+        required: true
+        type: choice
+        options: [no-issues, issues-write]
+jobs:
+  no-issues:
+    if: inputs.variant == 'no-issues'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - run: gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$PR/merge" -f merge_method=merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+  issues-write:
+    if: inputs.variant == 'issues-write'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - run: gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$PR/merge" -f merge_method=merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
