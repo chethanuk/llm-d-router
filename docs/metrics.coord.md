@@ -165,6 +165,7 @@ Recorded by the decode and conditional-decode steps when `pipeline.force_stream`
 *   **Description:** Counts force-stream candidates, the non-streaming requests on a route the step can reassemble, by outcome. The metric's Help string defines each `result` value. `forced` is a reassembled reply. The `fallback_*` values and `error_ceiling` take the non-forced pass-through. `error_upstream` (an upstream 4xx/5xx, or an error frame streamed after the 200) and `error_transport` fail the request and are also counted by `step_errors_total`.
 *   When the forced attempt already consumed a one-shot KV block handoff (`kv-nixl`, `kv-offloading`), the fallback pass-through drops the handoff and the decode worker recomputes the prompt. The request is slower but still served, and is counted under its fallback outcome.
 *   A decline or fallback outcome is recorded once the worker answers the pass-through, so a request whose client leaves before then records none.
+*   On native vLLM gRPC, `error_ceiling` fails the request instead of taking the pass-through, and a forced call that fails for another reason records no outcome here; `step_errors_total` counts it.
 *   conditional-decode records an outcome only for a probe the worker serves or fails. A deferred probe (HTTP 412) records none, including one deferred after a decline or fallback, so a request that continues to decode is counted once, by decode.
 
 #### `force_stream_buffered_bytes` (Gauge)

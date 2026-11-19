@@ -436,10 +436,14 @@ requests therefore runs `prefill` and `decode` on every gRPC Generate request. T
 On `POST /vllm.Inference/Generate` and `POST /vllm.Inference/GenerateStream`, the
 coordinator runs `conditional-decode`, `encode`, `prefill`, and `decode` in sequence
 over HTTP/2 gRPC. `encode` and `prefill` call the worker's unary `Generate`.
-`conditional-decode` and `decode` call `GenerateStream`; when the client asks for one
-response, the coordinator merges the stream frames into one `GenerateResponse`, capped at
-64 MiB, before it replies, so decode workers must implement `GenerateStream` even for
-unary clients. On `conditional-decode`, the coordinator sends `Prefer: if-available`
+`conditional-decode` and `decode` call `GenerateStream` for streaming clients. For a
+client that asks for one response, they call `Generate`, unless the pipeline sets
+`force_stream`: then they call `GenerateStream` and merge the stream frames into one
+`GenerateResponse` before replying. The merge reserves bytes from
+`force_stream_buffer_size`, sized from `max_new_tokens` and `num_sequences` and capped by
+`force_stream_max_request_size`; a request that does not fit, or whose response options
+ask for prompt token ids, logprobs, or candidates, calls `Generate`. A merge that outgrows
+its reservation fails the request. On `conditional-decode`, the coordinator sends `Prefer: if-available`
 to decode and treats HTTP `412` or gRPC `FAILED_PRECONDITION` as a deferral. On a
 deferral, the pipeline continues through `encode`, `prefill`, and `decode`. The `encode`
 step runs only when the request carries `media` items. The `render`,

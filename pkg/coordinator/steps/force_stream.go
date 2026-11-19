@@ -32,6 +32,7 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/go-logr/logr"
 
+	"github.com/llm-d/llm-d-router/pkg/common/grpc/vllm/vllmwire"
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 
@@ -284,20 +285,37 @@ func parseForceStreamPerRequest(sizeStr string, budgetMax int64) (int64, error) 
 // pass-through, never past the budget.
 func (b *forceStreamBudget) estimateReservation(reqCtx *pipeline.RequestContext) (int64, bool) {
 	apiType := reqcommon.DetectAPIType(reqCtx.OriginalPath)
+	tokenLimit, ok := reqcommon.OutputTokenLimit(reqCtx.Body, apiType)
+	return b.reservationFor(int64(reqcommon.OutputChoiceCount(reqCtx.Body, apiType)), int64(tokenLimit), ok)
+}
 
+// estimateVLLMReservation is estimateReservation for a vLLM gRPC request, whose
+// stopping.max_new_tokens and sampling.num_sequences stand in for the token limit
+// and n. Each token is charged two units: the merge counts frame payloads, and a
+// stream of one token per frame repeats up to 15 bytes of protobuf framing, index,
+// num_tokens and a varint token id next to the token's text.
+func (b *forceStreamBudget) estimateVLLMReservation(req *vllmwire.Request) (int64, bool) {
+	n := int64(1)
+	if seqs, ok := req.NumSequences(); ok && seqs > 0 {
+		n = int64(seqs)
+	}
+	tokenLimit, ok := req.MaxNewTokens()
+	// proto3 max_new_tokens 0 means the server default, not a zero limit.
+	return b.reservationFor(n, 2*int64(tokenLimit), ok && tokenLimit > 0)
+}
+
+func (b *forceStreamBudget) reservationFor(n, tokenLimit int64, hasLimit bool) (int64, bool) {
 	maxBytes := b.perRequestMax
 	// parseForceStreamPerRequest rejects a cap at or below the envelope overhead,
 	// so contentBudget is always positive once the budget is built.
 	contentBudget := maxBytes - forceStreamBaseOverheadBytes
 
-	n := reqcommon.OutputChoiceCount(reqCtx.Body, apiType)
-	tokenLimit, ok := reqcommon.OutputTokenLimit(reqCtx.Body, apiType)
-	if !ok {
+	if !hasLimit {
 		// No declared limit, so reserve the whole per-request budget and let the
 		// ceiling abort a reply that runs past it. The choice count is still
 		// guarded: each choice the reassembler keeps is charged its envelope
 		// overhead, so an n the cap cannot hold at that rate is refused.
-		if int64(n) > contentBudget/forceStreamPerChoiceOverheadBytes {
+		if n > contentBudget/forceStreamPerChoiceOverheadBytes {
 			return 0, false
 		}
 		return maxBytes, true
@@ -306,14 +324,14 @@ func (b *forceStreamBudget) estimateReservation(reqCtx *pipeline.RequestContext)
 	// Each guard below both enforces the budget ceiling and keeps the following
 	// multiplication inside int64: a client-supplied tokenLimit or n large
 	// enough to overflow first exceeds contentBudget here and returns false.
-	if int64(tokenLimit) > (contentBudget-forceStreamPerChoiceOverheadBytes)/forceStreamBytesPerToken {
+	if tokenLimit > (contentBudget-forceStreamPerChoiceOverheadBytes)/forceStreamBytesPerToken {
 		return 0, false
 	}
-	perChoice := int64(tokenLimit)*forceStreamBytesPerToken + forceStreamPerChoiceOverheadBytes
-	if int64(n) > contentBudget/perChoice {
+	perChoice := tokenLimit*forceStreamBytesPerToken + forceStreamPerChoiceOverheadBytes
+	if n > contentBudget/perChoice {
 		return 0, false
 	}
-	return int64(n)*perChoice + forceStreamBaseOverheadBytes, true
+	return n*perChoice + forceStreamBaseOverheadBytes, true
 }
 
 // responsesEchoBytes is the share of a forced request's reservation set aside for
