@@ -625,6 +625,12 @@ func TestBuildHTTPGenerateResponse_OutputMode(t *testing.T) {
 }
 
 func TestUnaryTokenClientGetsMergedStreamedResponse(t *testing.T) {
+	// force_stream turns the merge on. The per-request size is above the 64 MiB
+	// message limit, so that limit is the merge ceiling here.
+	const (
+		mergeBufferSize     = "1GiB"
+		mergeMaxRequestSize = "128MiB"
+	)
 	cand := func(id uint32) *vllmpb.CandidateTokenInfo {
 		return &vllmpb.CandidateTokenInfo{Tokens: []*vllmpb.CandidateTokenInfo_TokenInfo{{Id: id, Logprob: -1, Rank: 1}}}
 	}
@@ -933,6 +939,7 @@ func TestUnaryTokenClientGetsMergedStreamedResponse(t *testing.T) {
 			case "decode":
 				s, err := NewDecodeStep(gwClient, map[string]any{ParamKVConnector: kv.SharedStorage})
 				require.NoError(t, err)
+				require.NoError(t, EnableForceStream([]pipeline.Step{s}, mergeBufferSize, mergeMaxRequestSize))
 				if execErr := s.Execute(ctx, reqCtx); tc.wantErr {
 					require.Error(t, execErr)
 					if tc.wantErrIs != nil {
@@ -951,6 +958,7 @@ func TestUnaryTokenClientGetsMergedStreamedResponse(t *testing.T) {
 			case "conditional-decode":
 				s, err := NewConditionalDecodeStep(gwClient, nil)
 				require.NoError(t, err)
+				require.NoError(t, EnableForceStream([]pipeline.Step{s}, mergeBufferSize, mergeMaxRequestSize))
 				if execErr := s.Execute(ctx, reqCtx); tc.wantDeferred {
 					require.NoError(t, execErr)
 				} else {

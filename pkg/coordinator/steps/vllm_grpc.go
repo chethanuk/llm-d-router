@@ -47,10 +47,12 @@ import (
 // with the single frame a unary Generate would return, so the unary relay and
 // HTTP paths read it unchanged. A non-OK final grpc-status drops the frame,
 // as a failed unary call carries none. A read error, an unparsable frame or an
-// OK stream with no frame is returned by the replacement body's Read.
-func mergeVLLMStreamBody(resp *http.Response) {
+// OK stream with no frame is returned by the replacement body's Read, as is a
+// stream whose frame payloads sum past limit bytes. The read error is also
+// returned.
+func mergeVLLMStreamBody(resp *http.Response, limit int64) error {
 	var body io.Reader
-	frame, err := readMergedVLLMStream(resp.Body)
+	frame, err := readMergedVLLMStream(resp.Body, limit)
 	switch {
 	case err != nil:
 		// An oversize merge maps like a single oversize unary frame.
@@ -66,6 +68,38 @@ func mergeVLLMStreamBody(resp *http.Response) {
 		io.Reader
 		io.Closer
 	}{body, resp.Body}
+	return err
+}
+
+// mergeVLLMStreamWithinReservation merges resp like mergeVLLMStreamBody, with
+// the reservation as the ceiling, and records error_ceiling on an overrun.
+func mergeVLLMStreamWithinReservation(reqCtx *pipeline.RequestContext, step string, resp *http.Response, reserved int64) {
+	if err := mergeVLLMStreamBody(resp, min(reserved, maxGRPCFrameBytes)); errors.Is(err, grpcframe.ErrTooLarge) {
+		coordmetrics.IncForceStreamTotal(reqCtx.Model, step, coordmetrics.ForceStreamResultErrorCeiling)
+	}
+}
+
+// reserveVLLMMerge reserves the bytes a unary client's merged GenerateStream
+// reply may buffer, sized like a forced HTTP decode. reserved is 0 when the
+// step calls unary Generate instead: force_stream is off (empty result), or
+// result is the fallback to record. The caller releases a nonzero reservation.
+func reserveVLLMMerge(budget *forceStreamBudget, step string, req *vllmwire.Request) (reserved int64, result string) {
+	if budget == nil {
+		return 0, ""
+	}
+	// The estimate sizes generated text only, so a reply carrying per-token
+	// extras would overrun it, as the HTTP path declines logprobs.
+	if req.RequestsPerTokenExtras() {
+		return 0, coordmetrics.ForceStreamResultFallbackUnsupported
+	}
+	reserved, ok := budget.estimateVLLMReservation(req)
+	if !ok {
+		return 0, coordmetrics.ForceStreamResultFallbackUnbounded
+	}
+	if !budget.tryReserve(step, reserved) {
+		return 0, coordmetrics.ForceStreamResultFallbackBudget
+	}
+	return reserved, ""
 }
 
 func finalGRPCStatusIsError(resp *http.Response) bool {
@@ -78,7 +112,7 @@ func finalGRPCStatusIsError(resp *http.Response) bool {
 // the first frame that has it; finish_info and sampling_mask from the last
 // output that has them; the per-token fields and unknown fields are
 // concatenated and num_tokens summed.
-func readMergedVLLMStream(r io.Reader) ([]byte, error) {
+func readMergedVLLMStream(r io.Reader, limit int64) ([]byte, error) {
 	frames := grpcframe.NewReader(r, maxGRPCFrameBytes)
 	defer frames.Release()
 
@@ -89,7 +123,7 @@ func readMergedVLLMStream(r io.Reader) ([]byte, error) {
 		msg      vllmpb.GenerateResponse
 		nFrames  int
 		hasOut   bool
-		payloads int
+		payloads int64
 	)
 	for {
 		frame, err := frames.Next()
@@ -99,9 +133,9 @@ func readMergedVLLMStream(r io.Reader) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		payloads += len(frame) - grpcframe.HeaderLen
-		if payloads > maxGRPCFrameBytes {
-			return nil, fmt.Errorf("%w: merged GenerateStream response exceeds %d bytes", grpcframe.ErrTooLarge, maxGRPCFrameBytes)
+		payloads += int64(len(frame) - grpcframe.HeaderLen)
+		if payloads > limit {
+			return nil, fmt.Errorf("%w: merged GenerateStream response exceeds %d bytes", grpcframe.ErrTooLarge, limit)
 		}
 		msg.Reset()
 		if err := proto.Unmarshal(frame[grpcframe.HeaderLen:], &msg); err != nil {
@@ -177,6 +211,19 @@ func (s *ConditionalDecodeStep) executeVLLMGRPC(ctx context.Context, reqCtx *pip
 	headers := gatewayHeaders(reqCtx, gateway.PhaseDecode)
 	headers["Prefer"] = "if-available"
 	path := vllmpb.Inference_GenerateStream_FullMethodName
+	var reserved int64
+	if !reqCtx.Stream {
+		var result string
+		reserved, result = reserveVLLMMerge(s.budget, ConditionalDecodeStepName, &vllmReq.Req)
+		if result != "" {
+			coordmetrics.IncForceStreamTotal(reqCtx.Model, ConditionalDecodeStepName, result)
+		}
+		if reserved == 0 {
+			path = vllmpb.Inference_Generate_FullMethodName
+		} else {
+			defer s.budget.release(ConditionalDecodeStepName, reserved)
+		}
+	}
 	logger.V(logutil.DEFAULT).Info("sending gRPC request", "path", path, "stream", reqCtx.Stream)
 
 	resp, err := streamGRPCToGateway(ctx, s.gwClient, coordmetrics.UpstreamConditionalDecode, path, headers, segs...)
@@ -208,8 +255,8 @@ func (s *ConditionalDecodeStep) executeVLLMGRPC(ctx context.Context, reqCtx *pip
 		coordmetrics.IncConditionalDecodeProbes(coordmetrics.ProbeResultError)
 		return upstreamGRPCError(ConditionalDecodeStepName, reqCtx, st)
 	}
-	if !reqCtx.Stream {
-		mergeVLLMStreamBody(resp)
+	if reserved > 0 {
+		mergeVLLMStreamWithinReservation(reqCtx, ConditionalDecodeStepName, resp, reserved)
 	}
 
 	outcome, err := forwardVLLMDecodeResponse(ctx, logger, ConditionalDecodeStepName, reqCtx, vllmReq, resp, true, s.promptTokenParity)
@@ -227,6 +274,9 @@ func (s *ConditionalDecodeStep) executeVLLMGRPC(ctx context.Context, reqCtx *pip
 	}
 	if err != nil {
 		return err
+	}
+	if reserved > 0 {
+		coordmetrics.IncForceStreamTotal(reqCtx.Model, ConditionalDecodeStepName, coordmetrics.ForceStreamResultForced)
 	}
 	logger.V(logutil.DEFAULT).Info("cache hit, response forwarded")
 	return pipeline.ErrPipelineDone
@@ -382,9 +432,22 @@ func (s *DecodeStep) executeVLLMGRPC(ctx context.Context, reqCtx *pipeline.Reque
 	}
 
 	headers := decodeLegHeaders(reqCtx)
-	// Unary clients are streamed too: EPP reads the end of prefill from the
-	// first stream chunk (#3519).
+	// With force_stream on, unary clients are streamed too: EPP reads the end
+	// of prefill from the first stream chunk (#3519).
 	path := vllmpb.Inference_GenerateStream_FullMethodName
+	var reserved int64
+	if !reqCtx.Stream {
+		var result string
+		reserved, result = reserveVLLMMerge(s.budget, DecodeStepName, &vllmReq.Req)
+		if result != "" {
+			coordmetrics.IncForceStreamTotal(reqCtx.Model, DecodeStepName, result)
+		}
+		if reserved == 0 {
+			path = vllmpb.Inference_Generate_FullMethodName
+		} else {
+			defer s.budget.release(DecodeStepName, reserved)
+		}
+	}
 	logger.V(logutil.DEFAULT).Info("sending gRPC request", "path", path, "stream", reqCtx.Stream)
 
 	resp, err := streamGRPCToGateway(ctx, s.gwClient, coordmetrics.UpstreamDecode, path, headers, segs...)
@@ -396,11 +459,14 @@ func (s *DecodeStep) executeVLLMGRPC(ctx context.Context, reqCtx *pipeline.Reque
 	if err := checkGRPCDecodeHeaders(reqCtx, resp); err != nil {
 		return err
 	}
-	if !reqCtx.Stream {
-		mergeVLLMStreamBody(resp)
+	if reserved > 0 {
+		mergeVLLMStreamWithinReservation(reqCtx, DecodeStepName, resp, reserved)
 	}
 
 	_, err = forwardVLLMDecodeResponse(ctx, logger, DecodeStepName, reqCtx, vllmReq, resp, false, s.promptTokenParity)
+	if err == nil && reserved > 0 {
+		coordmetrics.IncForceStreamTotal(reqCtx.Model, DecodeStepName, coordmetrics.ForceStreamResultForced)
+	}
 	return err
 }
 
