@@ -60,6 +60,17 @@ var (
 	reqPriority  = protoscan.FieldNum(&vllmpb.GenerateRequest{}, "priority")
 	reqMedia     = protoscan.FieldNum(&vllmpb.GenerateRequest{}, "media")
 	reqLoraName  = protoscan.FieldNum(&vllmpb.GenerateRequest{}, "lora_name")
+	reqResponse  = protoscan.FieldNum(&vllmpb.GenerateRequest{}, "response")
+
+	// respPerTokenFields are the ResponseOptions fields that add per-token or
+	// per-prompt-token data to the reply.
+	respPerTokenFields = []protowire.Number{
+		protoscan.FieldNum(&vllmpb.ResponseOptions{}, "prompt_token_ids"),
+		protoscan.FieldNum(&vllmpb.ResponseOptions{}, "prompt_logprobs"),
+		protoscan.FieldNum(&vllmpb.ResponseOptions{}, "prompt_candidates"),
+		protoscan.FieldNum(&vllmpb.ResponseOptions{}, "output_logprobs"),
+		protoscan.FieldNum(&vllmpb.ResponseOptions{}, "output_candidates"),
+	}
 
 	tokenIDsIDs = protoscan.FieldNum(&vllmpb.TokenIds{}, "ids")
 
@@ -160,6 +171,8 @@ type Request struct {
 	maxNewTokens    uint32
 	hasPriority     bool
 	priority        int32
+
+	perTokenExtras bool
 
 	bypassPrefixCache bool
 	hasCacheSalt      bool
@@ -284,6 +297,11 @@ func (r *Request) MaxNewTokens() (uint32, bool) { return r.maxNewTokens, r.hasMa
 
 // NumSequences returns sampling.num_sequences and whether the client set it.
 func (r *Request) NumSequences() (uint32, bool) { return r.numSequences, r.hasNumSequences }
+
+// RequestsPerTokenExtras reports whether response options ask for prompt token
+// ids, prompt or output logprobs, or candidates. A field present with a zero
+// value counts too.
+func (r *Request) RequestsPerTokenExtras() bool { return r.perTokenExtras }
 
 // Priority returns GenerateRequest.priority and whether the client set it.
 func (r *Request) Priority() (int32, bool) { return r.priority, r.hasPriority }
@@ -444,6 +462,16 @@ func (r *Request) scanBaseField(num protowire.Number, wt protowire.Type, value [
 		} else {
 			r.tokenIDsMore = append(r.tokenIDsMore, value)
 		}
+	case reqResponse:
+		if wt != protowire.BytesType {
+			return ErrMalformed
+		}
+		return protoscan.ForEachField(value, func(num protowire.Number, _ protowire.Type, _, _ []byte) error {
+			if slices.Contains(respPerTokenFields, num) {
+				r.perTokenExtras = true
+			}
+			return nil
+		})
 	case reqSampling:
 		if wt != protowire.BytesType {
 			return ErrMalformed
