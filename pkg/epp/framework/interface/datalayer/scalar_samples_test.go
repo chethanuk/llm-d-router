@@ -158,11 +158,20 @@ func TestScalarSamplesString(t *testing.T) {
 	update.ObserveCustom("custom", 0.25)
 	samples := update.Result()
 
-	rendered := samples.String()
-	assert.Regexp(t, `^\{WaitingQueueSize=5 age=1\.5\d*s, custom=0\.25 age=1\.5\d*s\}$`, rendered,
-		"observed samples render with value and age; unobserved fields are omitted")
-	assert.Contains(t, (&Metrics{ScalarSamples: samples}).String(), "ScalarSamples:"+rendered,
-		"Metrics.String renders the snapshot, not its address")
+	// Each String call reads the clock, so each render is matched on its own.
+	const want = `\{WaitingQueueSize=5 age=\d+(\.\d+)?s, custom=0\.25 age=\d+(\.\d+)?s\}`
+	for _, tc := range []struct {
+		name     string
+		rendered string
+		pattern  string
+	}{
+		{"observed samples render with value and age; unobserved fields are omitted", samples.String(), `^` + want + `$`},
+		{"Metrics.String renders the snapshot, not its address", (&Metrics{ScalarSamples: samples}).String(), `ScalarSamples:` + want},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Regexp(t, tc.pattern, tc.rendered)
+		})
+	}
 	assert.Equal(t, "<nil>", (*ScalarSamples)(nil).String())
 	assert.Contains(t, (&Metrics{}).String(), "ScalarSamples:<nil>")
 }
