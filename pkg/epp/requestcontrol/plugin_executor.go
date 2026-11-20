@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -56,6 +57,10 @@ func scopeProducers(ctx context.Context, extensionPoint string, plugins []fwkrh.
 	invocations := make([]producerInvocation, len(plugins))
 	for i, plugin := range plugins {
 		scopedRequest, scopedEndpoints, violations := datalayer.ScopeInvocation(logger, extensionPoint, plugin, request, endpoints)
+		if scopedRequest != nil {
+			// A producer that outlives its timeout must not share the map PreRequest writes into.
+			scopedRequest.Headers = maps.Clone(scopedRequest.Headers)
+		}
 		invocations[i] = producerInvocation{plugin: plugin, request: scopedRequest, endpoints: scopedEndpoints, violations: violations}
 	}
 	return invocations

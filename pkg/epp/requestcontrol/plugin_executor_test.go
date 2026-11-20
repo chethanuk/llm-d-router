@@ -20,6 +20,8 @@ package requestcontrol
 import (
 	"context"
 	"errors"
+	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -216,6 +218,70 @@ func TestDataProducerPluginsWithTimeout_ScopesBeforeLaunch(t *testing.T) {
 	<-plugin.started
 	close(plugin.release)
 	<-plugin.done
+}
+
+// lateHeaderReader ignores cancellation and keeps reading request.Headers after
+// the timeout path has returned, as a slow sessionid or tokenizer producer does.
+type lateHeaderReader struct {
+	started chan struct{}
+	stop    chan struct{}
+	done    chan struct{}
+	lastSaw string
+}
+
+func (p *lateHeaderReader) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "mock", Name: "late-header-reader"}
+}
+
+func (p *lateHeaderReader) Produce(_ context.Context, request *fwksched.InferenceRequest, _ []fwksched.Endpoint) error {
+	defer close(p.done)
+	close(p.started)
+	for {
+		select {
+		case <-p.stop:
+			p.lastSaw = request.Headers["x-session-id"]
+			return nil
+		default:
+			_ = request.Headers["x-session-id"]
+			runtime.Gosched()
+		}
+	}
+}
+
+func (p *lateHeaderReader) Produces() map[fwkplugin.DataKey]any { return nil }
+
+// TestDataProducerPluginsWithTimeout_LateHeaderReadIsSafe verifies that a
+// producer still reading headers after its timeout does not share the map the
+// director keeps writing routing headers into. A shared map is a fatal
+// concurrent map read and write under load, and a DATA RACE under -race.
+func TestDataProducerPluginsWithTimeout_LateHeaderReadIsSafe(t *testing.T) {
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-session-id": "s1"}}
+	plugin := &lateHeaderReader{
+		started: make(chan struct{}),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+
+	err := dataProducerPluginsWithTimeout(
+		context.Background(),
+		fwkrh.DataProducerExtensionPoint,
+		20*time.Millisecond,
+		[]fwkrh.DataProducer{plugin},
+		request,
+		nil,
+	)
+	require.Error(t, err)
+
+	<-plugin.started
+	// The director writes routing headers in PreRequest after the timeout.
+	for i := range 1000 {
+		request.Headers["x-llm-d-routing"] = strconv.Itoa(i)
+		request.Headers["x-session-id"] = "rewritten"
+	}
+	close(plugin.stop)
+	<-plugin.done
+
+	assert.Equal(t, "s1", plugin.lastSaw, "producer must see the headers as they were when it was scoped")
 }
 
 func TestDataProducerPluginsWithTimeout(t *testing.T) {
