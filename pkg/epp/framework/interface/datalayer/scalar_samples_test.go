@@ -17,6 +17,7 @@ limitations under the License.
 package datalayer
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -158,11 +159,13 @@ func TestScalarSamplesString(t *testing.T) {
 	update.ObserveCustom("custom", 0.25)
 	samples := update.Result()
 
-	rendered := samples.String()
-	assert.Regexp(t, `^\{WaitingQueueSize=5 age=1\.5\d*s, custom=0\.25 age=1\.5\d*s\}$`, rendered,
+	const want = `^\{WaitingQueueSize=5 age=1\.5\d*s, custom=0\.25 age=1\.5\d*s\}$`
+	assert.Regexp(t, want, samples.String(),
 		"observed samples render with value and age; unobserved fields are omitted")
-	assert.Contains(t, (&Metrics{ScalarSamples: samples}).String(), "ScalarSamples:"+rendered,
-		"Metrics.String renders the snapshot, not its address")
+	// Metrics.String reads the clock again, so match its segment on its own instead of comparing two renders.
+	segment := regexp.MustCompile(`ScalarSamples:(\{[^}]*\})`).FindStringSubmatch((&Metrics{ScalarSamples: samples}).String())
+	require.Len(t, segment, 2, "Metrics.String renders the snapshot, not its address")
+	assert.Regexp(t, want, segment[1], "Metrics.String renders the snapshot, not its address")
 	assert.Equal(t, "<nil>", (*ScalarSamples)(nil).String())
 	assert.Contains(t, (&Metrics{}).String(), "ScalarSamples:<nil>")
 }
