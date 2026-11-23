@@ -115,6 +115,15 @@ var (
 			"Block hashes forwarded for eviction after the KV-event dedup filter (block hashes, not BlockRemoved events)",
 			compbasemetrics.ALPHA),
 	})
+	// DedupTrackedBlocks tracks the number of block reference-count entries held
+	// by the kvevents dedup filter across all pods. Each entry is one block hash
+	// per pod, device tier and group; its count is not bounded by the index size.
+	DedupTrackedBlocks = prometheus.NewGauge(prometheus.GaugeOpts{
+		Subsystem: routerSubsystem, Name: "kv_cache_events_dedup_tracked_blocks",
+		Help: metricsutil.HelpMsgWithStability(
+			"Block reference-count entries held by the KV-event dedup filter",
+			compbasemetrics.ALPHA),
+	})
 	// KVEventStoresSkipped counts group-aware stores that cannot safely
 	// contribute to prefix indexing.
 	KVEventStoresSkipped = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -238,7 +247,7 @@ func Collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		Admissions, Evictions,
 		LookupRequests, LookupHits, LookupLatency, MaxPodHitCount,
-		DedupRemovedHashesSuppressed, DedupRemovedHashesForwarded,
+		DedupRemovedHashesSuppressed, DedupRemovedHashesForwarded, DedupTrackedBlocks,
 		KVEventStoresSkipped, KVEventRemovalsSkipped, KVEventUnknownTagsSkipped,
 		SubscriberActive, SubscriberReconnections, MessagesReceived, ZMQErrors,
 		LiveOnlySubscribers, SnapshotLoadDuration,

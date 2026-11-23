@@ -1321,6 +1321,7 @@ use the labels shown below.
 | `llm_d_epp_kv_cache_index_lookup_latency_seconds` | Histogram | - | Index lookup latency. Carries a trace exemplar; see [Exemplars](#exemplars). |
 | `llm_d_epp_kv_cache_events_dedup_removed_hashes_suppressed_total` | Counter | - | Deduplicated removal hashes suppressed. |
 | `llm_d_epp_kv_cache_events_dedup_removed_hashes_forwarded_total` | Counter | - | Deduplicated removal hashes forwarded. |
+| `llm_d_epp_kv_cache_events_dedup_tracked_blocks` | Gauge | - | Block reference-count entries held by the dedup filter. |
 | `llm_d_epp_kv_cache_events_stores_skipped_total` | Counter | `cache_kind`, `reason` | KV store events skipped before prefix indexing. |
 | `llm_d_epp_kv_cache_events_removals_skipped_total` | Counter | `cache_kind`, `reason` | KV removal events skipped before prefix indexing. |
 | `llm_d_epp_kv_cache_events_unknown_tags_skipped_total` | Counter | `tag` | KV events skipped because the engine adapter does not know their tag. |

@@ -19,7 +19,10 @@ package kvevents //nolint:testpackage // tests use the unexported eventDedupFilt
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/llm-d/llm-d-router/pkg/kvcache/metrics"
 )
 
 func testScope(pod, tier string, group, dpRank int) blockScope {
@@ -182,6 +185,78 @@ func TestEventDedupFilter_ClearIsolatesPods(t *testing.T) {
 		"cleared pod-a count must be reset")
 	assert.Empty(t, f.filterRemove(b, []uint64{1}),
 		"pod-b count must survive pod-a clear (first of two removes suppressed)")
+}
+
+// TestEventDedupFilter_TrackedBlocksGauge verifies the tracked-blocks gauge
+// follows the number of distinct keys the filter holds, so operators can see
+// its memory footprint.
+func TestEventDedupFilter_TrackedBlocksGauge(t *testing.T) {
+	a := gpuScope("pod-a")
+	b := gpuScope("pod-b")
+	cpuA := testScope("pod-a", "cpu", noGroupIdx, noDataParallelRank)
+
+	tests := []struct {
+		name string
+		ops  func(f *eventDedupFilter)
+		want float64
+	}{
+		{"store counts each distinct hash", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1, 2, 3})
+		}, 3},
+		{"duplicate store does not add keys", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1, 2})
+			f.trackStore(a, []uint64{1, 2})
+		}, 2},
+		{"same hash in another tier is a separate key", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1})
+			f.trackStore(cpuA, []uint64{1})
+		}, 2},
+		{"suppressed remove keeps the key", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1})
+			f.trackStore(a, []uint64{1})
+			f.filterRemove(a, []uint64{1})
+		}, 1},
+		{"last remove drops the key", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1, 2})
+			f.filterRemove(a, []uint64{1})
+		}, 1},
+		{"unknown remove changes nothing", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1})
+			f.filterRemove(a, []uint64{9})
+			f.filterRemove(b, []uint64{1})
+		}, 1},
+		{"clear drops only that pod", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1, 2})
+			f.trackStore(cpuA, []uint64{1})
+			f.trackStore(b, []uint64{1})
+			f.clear("pod-a")
+		}, 1},
+		{"clear of unknown pod changes nothing", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1})
+			f.clear("pod-z")
+		}, 1},
+		{"store remove clear drains to zero", func(f *eventDedupFilter) {
+			f.trackStore(a, []uint64{1, 2})
+			f.trackStore(b, []uint64{3})
+			f.filterRemove(a, []uint64{1, 2})
+			f.clear("pod-b")
+		}, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The gauge is process-wide, so measure the change this filter makes.
+			before := testutil.ToFloat64(metrics.DedupTrackedBlocks)
+			f := newEventDedupFilter()
+			tt.ops(f)
+			assert.Equal(t, tt.want, testutil.ToFloat64(metrics.DedupTrackedBlocks)-before)
+			for pod := range f.refs {
+				f.clear(pod)
+			}
+			assert.Equal(t, before, testutil.ToFloat64(metrics.DedupTrackedBlocks),
+				"clearing every pod must return the gauge to its starting value")
+		})
+	}
 }
 
 // TestEventDedupFilter_NilSafe verifies the nil-receiver guards so a Pool
