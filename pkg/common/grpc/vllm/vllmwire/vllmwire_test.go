@@ -1415,3 +1415,30 @@ func TestSliceEncoderSpanAndEncoderTokenIDs(t *testing.T) {
 		t.Fatal("expected error on empty prompt")
 	}
 }
+
+func TestRequestsPerTokenExtras(t *testing.T) {
+	topN := &vllmpb.CandidateTokens{Select: &vllmpb.CandidateTokens_TopN{TopN: 5}}
+	tests := []struct {
+		name string
+		resp *vllmpb.ResponseOptions
+		want bool
+	}{
+		{name: "no response options", want: false},
+		{name: "text and token ids only", resp: &vllmpb.ResponseOptions{OutputText: proto.Bool(true), OutputTokenIds: true, SkipSpecialTokens: proto.Bool(false)}, want: false},
+		{name: "prompt token ids", resp: &vllmpb.ResponseOptions{PromptTokenIds: true}, want: true},
+		{name: "prompt logprobs", resp: &vllmpb.ResponseOptions{PromptLogprobs: true}, want: true},
+		{name: "prompt candidates", resp: &vllmpb.ResponseOptions{PromptCandidates: topN}, want: true},
+		{name: "output logprobs", resp: &vllmpb.ResponseOptions{OutputLogprobs: true}, want: true},
+		{name: "output candidates", resp: &vllmpb.ResponseOptions{OutputCandidates: topN}, want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := ScanGenerateRequest(mustMarshal(t, &vllmpb.GenerateRequest{
+				Prompt:   &vllmpb.GenerateRequest_Text{Text: "hello"},
+				Response: tc.resp,
+			}))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, req.RequestsPerTokenExtras())
+		})
+	}
+}

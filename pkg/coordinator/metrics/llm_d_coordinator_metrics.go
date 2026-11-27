@@ -222,7 +222,7 @@ var (
 					"error_ceiling (buffered reply exceeded its reserved budget, usually a short byte estimate), "+
 					"error_upstream (upstream 4xx/5xx, or an error frame streamed after the 200, forwarded to the client), "+
 					"or error_transport (no upstream response). "+
-					"The fallback outcomes and error_ceiling take the non-forced pass-through; when the forced attempt already "+
+					"The fallback outcomes and error_ceiling take the non-forced pass-through (on native vLLM gRPC, error_ceiling fails the request); when the forced attempt already "+
 					"consumed a one-shot KV block handoff, the pass-through drops it and decode recomputes the prompt; "+
 					"error_upstream and error_transport are also classified generically by step_errors_total. "+
 					"A conditional-decode probe the worker defers (HTTP 412) records no outcome; decode records the request's.",
