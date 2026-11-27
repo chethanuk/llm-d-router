@@ -30,6 +30,7 @@ import (
 	fwkrh "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requesthandling"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/openai"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/sglanghttp"
 )
 
 // A chat-completions usage line over maxSSELineBytes must still record its usage
@@ -137,9 +138,9 @@ func TestScanDroppedSSEUsage(t *testing.T) {
 			want: fwkrequest.Usage{},
 		},
 		{
-			name: "no usage object, meta_info style (not covered)",
-			line: `data: {"text":"hi","meta_info":{"prompt_tokens":3,"completion_tokens":4}}`,
-			want: fwkrequest.Usage{},
+			name: "sglang meta_info",
+			line: `data: {"text":"hi","meta_info":{"prompt_tokens":3,"completion_tokens":4,"finish_reason":"stop"}}`,
+			want: fwkrequest.Usage{PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7},
 		},
 	}
 	for _, tc := range tests {
@@ -365,4 +366,99 @@ func TestSalvagedUsageWinsOverEarlierParsedLine(t *testing.T) {
 	assert.Equal(t, 999, reqCtx.Usage.PromptTokens, "the dropped oversized line is the last usage event and must win")
 	assert.Equal(t, 999, reqCtx.Usage.CompletionTokens)
 	assert.Equal(t, 1998, reqCtx.Usage.TotalTokens)
+}
+
+// SGLang /generate reports tokens under meta_info instead of usage. A dropped
+// oversized line must still yield prompt, completion and cached counts.
+func TestSalvageSGLangMetaInfo(t *testing.T) {
+	t.Parallel()
+
+	real := fwkrequest.Usage{PromptTokens: 120, CompletionTokens: 30, TotalTokens: 150,
+		PromptTokenDetails: &fwkrequest.PromptTokenDetails{CachedTokens: 64}}
+	logprobs := strings.Repeat("[-0.5,1,null],", maxSalvageObjectBytes/14+1)
+
+	tests := []struct {
+		name string
+		line string
+		want *fwkrequest.Usage
+	}{
+		{
+			name: "plain_meta_info",
+			line: `data: {"text":"hi","meta_info":{"id":"r1","prompt_tokens":120,"completion_tokens":30,"cached_tokens":64,"finish_reason":"stop"}}`,
+			want: &real,
+		},
+		{
+			name: "intermediate_chunk_without_finish_reason_is_ignored",
+			line: `data: {"text":"hi","meta_info":{"id":"r1","prompt_tokens":120,"completion_tokens":7,"cached_tokens":64,"finish_reason":null}}`,
+			want: nil,
+		},
+		{
+			name: "meta_info_text_inside_a_later_string_value",
+			line: `data: {"meta_info":{"prompt_tokens":120,"completion_tokens":30,"cached_tokens":64,"finish_reason":"stop"},"text":"echo \"meta_info\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"cached_tokens\":1,\"finish_reason\":\"stop\"}"}`,
+			want: &real,
+		},
+		{
+			name: "escaped_quote_and_braces_in_a_nested_string",
+			line: `data: {"text":"x","meta_info":{"finish_reason":{"type":"stop","matched":"}\"{"},"prompt_tokens":120,"completion_tokens":30,"cached_tokens":64}}`,
+			want: &real,
+		},
+		{
+			name: "later_usage_wins_over_meta_info",
+			line: `data: {"meta_info":{"prompt_tokens":1,"completion_tokens":2,"cached_tokens":64,"finish_reason":"stop"},"usage":{"prompt_tokens":120,"completion_tokens":30,"total_tokens":150}}`,
+			want: &fwkrequest.Usage{PromptTokens: 120, CompletionTokens: 30, TotalTokens: 150},
+		},
+		{
+			name: "later_meta_info_wins_over_usage",
+			line: `data: {"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3},"meta_info":{"prompt_tokens":120,"completion_tokens":30,"cached_tokens":64,"finish_reason":"stop"}}`,
+			want: &real,
+		},
+		{
+			name: "meta_info_with_logprobs_over_the_size_cap_is_skipped",
+			line: `data: {"text":"x","meta_info":{"finish_reason":"stop","prompt_tokens":120,"completion_tokens":30,"input_token_logprobs":[` + logprobs + `null]}}`,
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, scanDroppedSSEUsage([]byte(tc.line)), "whole line")
+
+			// Feed one byte per chunk so every split, including inside the
+			// meta_info key and object, goes through the production path.
+			reqCtx := &RequestContext{}
+			for i := range len(tc.line) {
+				salvageDroppedSSELine(context.Background(), reqCtx, []byte(tc.line[i:i+1]), i == len(tc.line)-1)
+			}
+			assert.Equal(t, tc.want, reqCtx.salvagedUsage, "byte per chunk")
+		})
+	}
+}
+
+// An SGLang /generate stream whose final meta_info line is over the cap must
+// still record the final counts, not those of the parsed intermediate chunk.
+func TestOversizedSGLangFinalMetaInfoLineSalvaged(t *testing.T) {
+	t.Parallel()
+
+	pad := strings.Repeat("x", maxSSELineBytes+1024)
+	stream := `data: {"text":"a","meta_info":{"id":"r1","prompt_tokens":120,"completion_tokens":7,"cached_tokens":64,"finish_reason":null}}` + "\n\n" +
+		`data: {"text":"` + pad + `","meta_info":{"id":"r1","prompt_tokens":120,"completion_tokens":30,"cached_tokens":64,"finish_reason":{"type":"stop"}}}` + "\n\n" +
+		"data: [DONE]\n\n"
+
+	server := &StreamingServer{director: &mockDirector{}}
+	reqCtx := &RequestContext{
+		Parser:            sglanghttp.NewSGLangHTTPParser(),
+		Response:          &Response{Headers: map[string]string{"content-type": "text/event-stream"}},
+		SchedulingRequest: &fwksched.InferenceRequest{FairnessID: reqcommon.DefaultFairnessID},
+	}
+	for i := 0; i < len(stream); i += 65536 {
+		end := min(i+65536, len(stream))
+		server.HandleResponseBody(context.Background(), reqCtx, []byte(stream[i:end]), end == len(stream))
+	}
+
+	assert.Equal(t, 120, reqCtx.Usage.PromptTokens)
+	assert.Equal(t, 30, reqCtx.Usage.CompletionTokens, "final meta_info must be salvaged from the dropped line")
+	assert.Equal(t, 150, reqCtx.Usage.TotalTokens)
+	require.NotNil(t, reqCtx.Usage.PromptTokenDetails)
+	assert.Equal(t, 64, reqCtx.Usage.PromptTokenDetails.CachedTokens)
 }

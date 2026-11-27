@@ -181,6 +181,9 @@ const (
 	FieldCachedTokens             = "cached_tokens"               //#nosec G101 -- JSON field name, not a credential
 	FieldCacheReadInputTokens     = "cache_read_input_tokens"     //#nosec G101 -- JSON field name, not a credential
 	FieldCacheCreationInputTokens = "cache_creation_input_tokens" //#nosec G101 -- JSON field name, not a credential
+	// FieldMetaInfo is where SGLang /generate reports prompt_tokens,
+	// completion_tokens and cached_tokens instead of a usage object.
+	FieldMetaInfo = "meta_info"
 )
 
 // FieldResponse wraps the response object in Responses stream events, which is
