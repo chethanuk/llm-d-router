@@ -14,7 +14,11 @@
 
 package kvevents
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/llm-d/llm-d-router/pkg/kvcache/metrics"
+)
 
 // noGroupIdx is the sentinel groupIdx used in a dedup scope when an event
 // carries no KV-cache group. It mirrors the "no group" PodEntry state
@@ -98,6 +102,7 @@ func (s blockScope) key(blockHash uint64) dedupKey {
 // index-internal eviction with no matching wire remove, both of which leave a
 // harmless over-estimate (see above) rather than a correctness error. This
 // mirrors the bounded-by-the-wire behavior of Dynamo's EventDedupFilter.
+// The kv_cache_events_dedup_tracked_blocks gauge reports the entry count.
 //
 // It is safe for concurrent use: the single mutex guards the whole cross-pod
 // map. The Pool additionally shards work by pod identifier (see Pool.AddTask),
@@ -127,9 +132,15 @@ func (f *eventDedupFilter) trackStore(scope blockScope, blockHashes []uint64) {
 		bucket = make(map[dedupKey]int)
 		f.refs[scope.podIdentifier] = bucket
 	}
+	added := 0
 	for _, h := range blockHashes {
-		bucket[scope.key(h)]++
+		k := scope.key(h)
+		if bucket[k] == 0 {
+			added++
+		}
+		bucket[k]++
 	}
+	metrics.DedupTrackedBlocks.Add(float64(added))
 }
 
 // filterRemove decrements the reference count for each removed block hash and
@@ -147,6 +158,7 @@ func (f *eventDedupFilter) filterRemove(scope blockScope, blockHashes []uint64) 
 
 	bucket := f.refs[scope.podIdentifier]
 	kept := make([]uint64, 0, len(blockHashes))
+	released := 0
 	for _, h := range blockHashes {
 		if bucket == nil {
 			kept = append(kept, h) // unknown pod -> defensive pass-through
@@ -161,6 +173,7 @@ func (f *eventDedupFilter) filterRemove(scope blockScope, blockHashes []uint64) 
 		count--
 		if count == 0 {
 			delete(bucket, k)
+			released++
 			kept = append(kept, h) // last reference released -> evict for real
 			continue
 		}
@@ -169,6 +182,7 @@ func (f *eventDedupFilter) filterRemove(scope blockScope, blockHashes []uint64) 
 	if bucket != nil && len(bucket) == 0 {
 		delete(f.refs, scope.podIdentifier)
 	}
+	metrics.DedupTrackedBlocks.Sub(float64(released))
 	return kept
 }
 
@@ -183,5 +197,6 @@ func (f *eventDedupFilter) clear(podIdentifier string) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	metrics.DedupTrackedBlocks.Sub(float64(len(f.refs[podIdentifier])))
 	delete(f.refs, podIdentifier)
 }

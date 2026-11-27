@@ -74,6 +74,7 @@ func TestCollectorsIncludesAllMetrics(t *testing.T) {
 		{"EventsMissed", EventsMissed},
 		{"EventsDropped", EventsDropped},
 		{"EventsProcessingLag", EventsProcessingLag},
+		{"DedupTrackedBlocks", DedupTrackedBlocks},
 	}
 
 	for _, e := range expected {
@@ -92,6 +93,7 @@ func TestKVEventsMetricNames(t *testing.T) {
 		SubscriberActive, SubscriberReconnections, MessagesReceived,
 		ZMQErrors, LiveOnlySubscribers, SnapshotLoadDuration, PoolQueueDepth, PoolCapacity,
 		EventsSequenceGaps, EventsMissed, EventsDropped, EventsProcessingLag,
+		DedupTrackedBlocks,
 	}
 	for _, c := range kvevents {
 		reg.MustRegister(c)
@@ -140,6 +142,7 @@ func TestKVEventsMetricNames(t *testing.T) {
 		"llm_d_epp_kv_cache_events_missed_total",
 		"llm_d_epp_kv_cache_events_dropped_total",
 		"llm_d_epp_kv_cache_events_processing_lag_seconds",
+		"llm_d_epp_kv_cache_events_dedup_tracked_blocks",
 	} {
 		if !got[name] {
 			t.Errorf("expected metric %q to be registered, got names: %v", name, got)
