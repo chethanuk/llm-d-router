@@ -419,6 +419,7 @@ an `InferencePool`.
 | `llm_d_epp_std_dev_queue_size` | Gauge | `name` (InferencePool name) | Spread of queue depth. |
 | `llm_d_epp_std_dev_running_requests` | Gauge | `name` (InferencePool name) | Spread of in-flight requests. |
 | `llm_d_epp_ready_endpoints` | Gauge | `name` (InferencePool name) | Ready endpoints in the pool. |
+| `llm_d_epp_pool_base_models` | Gauge | `name` (InferencePool name) | Distinct base models reported on `/v1/models` by ready endpoints. LoRA adapters and endpoints that have not reported are ignored. Above 1 means the pool mixes base models. |
 | `llm_d_epp_per_endpoint_queue_size` | Gauge | `name` (InferencePool name), `model_server_endpoint` | Per-endpoint queue depth. |
 | `llm_d_epp_per_endpoint_nixl_failed_transfers_total` | Counter | `name` (InferencePool name), `model_server_endpoint` | Per-endpoint failed NIXL KV cache transfers. |
 | `llm_d_epp_per_endpoint_nixl_failed_notifications_total` | Counter | `name` (InferencePool name), `model_server_endpoint` | Per-endpoint failed NIXL KV cache notifications. |

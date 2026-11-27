@@ -245,6 +245,15 @@ var (
 		},
 		poolLabels,
 	)
+
+	llmdInferencePoolBaseModels = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: LLMDRouterEndpointPickerSubsystem,
+			Name:      "pool_base_models",
+			Help:      metricsutil.HelpMsgWithStability("The number of distinct base models served by the ready endpoints in the inference server pool.", compbasemetrics.ALPHA),
+		},
+		poolLabels,
+	)
 )
 
 // --- llm-d Scheduling Metrics ---

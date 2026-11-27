@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -29,6 +30,7 @@ import (
 	logutil "github.com/llm-d/llm-d-router/pkg/common/observability/logging"
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
+	attrmodels "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/attribute/models"
 	"github.com/llm-d/llm-d-router/pkg/epp/metrics"
 )
 
@@ -50,6 +52,7 @@ func StartMetricsLogger(ctx context.Context, datastore datalayer.PoolInfo, refre
 func runPrometheusRefresher(ctx context.Context, logger logr.Logger, datastore datalayer.PoolInfo, interval, stalenessThreshold time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	mismatchedPools := map[string]bool{}
 
 	for {
 		select {
@@ -57,7 +60,7 @@ func runPrometheusRefresher(ctx context.Context, logger logr.Logger, datastore d
 			logger.V(logutil.DEFAULT).Info("Shutting down prometheus metrics thread")
 			return
 		case <-ticker.C:
-			refreshPrometheusMetrics(logger, datastore, stalenessThreshold)
+			refreshPrometheusMetrics(logger, datastore, stalenessThreshold, mismatchedPools)
 		}
 	}
 }
@@ -103,7 +106,9 @@ func printDebugMetrics(logger logr.Logger, datastore datalayer.PoolInfo, stalene
 		"Fresh metrics", fmt.Sprintf("%+v", freshPods), "Stale metrics", fmt.Sprintf("%+v", stalePods))
 }
 
-func refreshPrometheusMetrics(logger logr.Logger, datastore datalayer.PoolInfo, stalenessThreshold time.Duration) {
+// refreshPrometheusMetrics sets the pool gauges. mismatchedPools holds the pools
+// currently logged as mixing base models and is owned by the caller.
+func refreshPrometheusMetrics(logger logr.Logger, datastore datalayer.PoolInfo, stalenessThreshold time.Duration, mismatchedPools map[string]bool) {
 	pool, err := datastore.PoolGet()
 	if err != nil {
 		logger.V(logutil.DEFAULT).Info("Pool is not initialized, skipping refreshing metrics")
@@ -114,6 +119,7 @@ func refreshPrometheusMetrics(logger logr.Logger, datastore datalayer.PoolInfo, 
 	logger.V(logutil.TRACE).Info("Refreshing Prometheus Metrics", "ReadyPods", len(podMetrics))
 	podCount := len(podMetrics)
 	metrics.RecordInferencePoolReadyPods(pool.Name, float64(podCount))
+	recordPoolBaseModels(logger, pool.Name, podMetrics, mismatchedPools)
 
 	if podCount == 0 {
 		return
@@ -127,6 +133,44 @@ func refreshPrometheusMetrics(logger logr.Logger, datastore datalayer.PoolInfo, 
 	metrics.RecordInferencePoolStdDevKVCache(pool.Name, summary.kvCache.stdv)
 	metrics.RecordInferencePoolStdDevQueueSize(pool.Name, summary.queueSize.stdv)
 	metrics.RecordInferencePoolStdDevRunningRequests(pool.Name, summary.runningRequests.stdv)
+}
+
+// recordPoolBaseModels sets the distinct base model gauge for the pool and logs
+// once when endpoints start disagreeing on the base model and once when they
+// agree again. Entries with a Parent are LoRA adapters and endpoints without
+// /v1/models data are skipped. With no base model reported at all the mismatch
+// state is kept, since nothing shows it was resolved.
+func recordPoolBaseModels(logger logr.Logger, poolName string, endpoints []fwkdl.Endpoint, mismatchedPools map[string]bool) {
+	bases := map[string]struct{}{}
+	for _, ep := range endpoints {
+		models, _ := fwkdl.ReadAttribute[attrmodels.ModelDataCollection](ep.GetAttributes(), attrmodels.ModelsAttributeKey)
+		for _, m := range models {
+			if m.ID != "" && m.Parent == "" {
+				bases[m.ID] = struct{}{}
+			}
+		}
+	}
+	metrics.RecordInferencePoolBaseModels(poolName, float64(len(bases)))
+	if len(bases) == 0 {
+		return
+	}
+
+	mismatch := len(bases) > 1
+	if mismatch == mismatchedPools[poolName] {
+		return
+	}
+	if mismatch {
+		names := make([]string, 0, len(bases))
+		for name := range bases {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		logger.Info("Warning: endpoints in the pool report different base models", "pool", poolName, "baseModels", names)
+		mismatchedPools[poolName] = true
+	} else {
+		logger.Info("Endpoints in the pool report the same base model again", "pool", poolName)
+		delete(mismatchedPools, poolName)
+	}
 }
 
 // stats holds aggregated metric values

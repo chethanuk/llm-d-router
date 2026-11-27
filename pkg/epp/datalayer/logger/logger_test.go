@@ -187,7 +187,7 @@ func TestRefreshPrometheusMetricsAvgValues(t *testing.T) {
 	// Integer truncation would give: RunningRequests=0, Queue=1
 	ds := &FakeOddMetricsDataStore{}
 
-	refreshPrometheusMetrics(logger, ds, 100*time.Millisecond)
+	refreshPrometheusMetrics(logger, ds, 100*time.Millisecond, map[string]bool{})
 
 	families, err := ctrlmetrics.Registry.Gather()
 	assert.NoError(t, err)
