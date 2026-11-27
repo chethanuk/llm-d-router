@@ -45,6 +45,8 @@ func TestMain(m *testing.M) {
 	// every test, so a test restoring otel.GetErrorHandler() in cleanup does not
 	// leave errors routed to a completed test's logger.
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) { log.Print(err) }))
+	// Tests that start spans expect every scope to record; scope tests set it per case.
+	os.Unsetenv("OTEL_TRACES_ENABLED_SCOPES")
 	os.Exit(m.Run())
 }
 
@@ -563,4 +565,85 @@ func TestNoneExporterReportsSelection(t *testing.T) {
 		}
 	}
 	t.Errorf("logged %q, want the selected exporter type reported", logged)
+}
+
+func TestTracerEnabledScopes(t *testing.T) {
+	const (
+		scopeA = "llm-d-router/pkg/epp/handlers"
+		scopeB = "llm-d-router/pkg/epp/scheduling"
+	)
+
+	recorder := tracetest.NewSpanRecorder()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	origTP := otel.GetTracerProvider()
+	otel.SetTracerProvider(tp)
+	t.Cleanup(func() { otel.SetTracerProvider(origTP) })
+
+	tests := []struct {
+		name    string
+		env     *string // nil leaves OTEL_TRACES_ENABLED_SCOPES unset
+		scope   string
+		wantRec bool
+	}{
+		{name: "unset_records_every_scope", env: nil, scope: scopeA, wantRec: true},
+		{name: "empty_records_every_scope", env: ptr(""), scope: scopeA, wantRec: true},
+		{name: "listed_scope_records", env: ptr(scopeA), scope: scopeA, wantRec: true},
+		{name: "unlisted_scope_records_nothing", env: ptr(scopeB), scope: scopeA, wantRec: false},
+		{name: "whitespace_around_entries_is_trimmed", env: ptr(" " + scopeB + " , " + scopeA + " "), scope: scopeA, wantRec: true},
+		{name: "default_scope_is_filtered_like_any_other", env: ptr(scopeA), scope: "", wantRec: false},
+		{name: "default_scope_records_when_listed", env: ptr(instrumentationName), scope: "", wantRec: true},
+		{name: "whitespace_only_records_every_scope", env: ptr("   "), scope: scopeA, wantRec: true},
+		{name: "separators_only_records_every_scope", env: ptr(" , ,"), scope: scopeA, wantRec: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder.Reset()
+			clearEnv(t, "OTEL_TRACES_ENABLED_SCOPES")
+			if tc.env != nil {
+				t.Setenv("OTEL_TRACES_ENABLED_SCOPES", *tc.env)
+			}
+
+			_, span := Tracer(tc.scope).Start(context.Background(), "test-span")
+			span.End()
+
+			if got := len(recorder.Ended()) == 1; got != tc.wantRec {
+				t.Errorf("span recorded = %v, want %v", got, tc.wantRec)
+			}
+		})
+	}
+
+	t.Run("enabled_child_attaches_to_nearest_enabled_ancestor", func(t *testing.T) {
+		recorder.Reset()
+		clearEnv(t, "OTEL_TRACES_ENABLED_SCOPES")
+		t.Setenv("OTEL_TRACES_ENABLED_SCOPES", scopeA)
+
+		ctx, root := Tracer(scopeA).Start(context.Background(), "root")
+		ctx, middle := Tracer(scopeB).Start(ctx, "disabled-middle")
+		if middle.IsRecording() || trace.SpanFromContext(ctx).IsRecording() {
+			t.Fatal("disabled scope exposed a recording span")
+		}
+		_, leaf := Tracer(scopeA).Start(ctx, "leaf")
+		leaf.End()
+		middle.End()
+		root.End()
+
+		ended := recorder.Ended()
+		if len(ended) != 2 {
+			t.Fatalf("recorded %d spans, want 2 (root and leaf)", len(ended))
+		}
+		var rootSC, leafParent trace.SpanContext
+		for _, s := range ended {
+			switch s.Name() {
+			case "root":
+				rootSC = s.SpanContext()
+			case "leaf":
+				leafParent = s.Parent()
+			}
+		}
+		if !rootSC.IsValid() || leafParent.SpanID() != rootSC.SpanID() || leafParent.TraceID() != rootSC.TraceID() {
+			t.Errorf("leaf parent = %s/%s, want root %s/%s",
+				leafParent.TraceID(), leafParent.SpanID(), rootSC.TraceID(), rootSC.SpanID())
+		}
+	})
 }
