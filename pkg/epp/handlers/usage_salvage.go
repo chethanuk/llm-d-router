@@ -30,6 +30,8 @@ import (
 
 // maxSalvageObjectBytes caps the usage object collected from a dropped line.
 // Every wire format reports a flat token block well below this size.
+// An SGLang meta_info that carries input or output token logprobs can exceed
+// it and is skipped, so its usage is lost.
 const maxSalvageObjectBytes = 64 << 10
 
 // salvageDroppedSSELine feeds the bytes of an SSE line dropped for exceeding
@@ -73,26 +75,28 @@ func scanDroppedSSEUsage(data []byte) *fwkrequest.Usage {
 }
 
 // usageSalvager scans the byte stream of one dropped SSE line as it arrives,
-// collecting the value of every "usage" key that maps to a JSON object. Only
-// state that spans chunks is retained: a partial string being read (as a
-// key candidate) and a usage object being collected. A usage value over
-// maxSalvageObjectBytes is discarded and skipped to its closing brace.
+// collecting the value of every "usage" or SGLang "meta_info" key that maps to
+// a JSON object. Only state that spans chunks is retained: a partial string
+// being read (as a key candidate) and a usage object being collected. A usage
+// value over maxSalvageObjectBytes is discarded and skipped to its closing
+// brace.
 // Everything else is processed byte by byte, so the memory overhead stays flat.
 type usageSalvager struct {
 	state       int // one of the states below
 	escape      bool
-	str         []byte // a string key being read, truncated just past len("usage")
+	str         []byte // a string key being read, truncated just past the longest key
 	obj         []byte // the usage object being collected
 	objInString bool
 	objEscape   bool
 	objDepth    int
+	metaInfo    bool // the key being matched or collected is meta_info
 	last        *fwkrequest.Usage
 }
 
 const (
 	scanOutsideString = iota // outside a JSON string
 	scanInString             // inside a string, accumulating it
-	scanAfterUsageKey        // a "usage" key just closed, expecting ':'
+	scanAfterUsageKey        // a "usage" or "meta_info" key just closed, expecting ':'
 	scanAfterColon           // the colon was seen, expecting '{' or a non-object value
 	scanCollect              // inside the usage object
 	scanSkipObject           // usage value exceeded the cap; skip to its closing brace
@@ -120,15 +124,20 @@ func (s *usageSalvager) step(c byte) {
 		case c == '\\':
 			s.escape = true
 		case c == '"':
-			if string(s.str) == reqcommon.FieldUsage {
+			switch string(s.str) {
+			case reqcommon.FieldUsage:
+				s.metaInfo = false
 				s.state = scanAfterUsageKey
-			} else {
+			case reqcommon.FieldMetaInfo:
+				s.metaInfo = true
+				s.state = scanAfterUsageKey
+			default:
 				s.state = scanOutsideString
 			}
 		default:
-			// Longer strings are not the key, but keep one extra byte so an
-			// overlong string never equals the candidate.
-			if len(s.str) <= len(reqcommon.FieldUsage) {
+			// Longer strings are not a key, but keep one extra byte so an
+			// overlong string never equals a candidate.
+			if len(s.str) <= len(reqcommon.FieldMetaInfo) {
 				s.str = append(s.str, c)
 			}
 		}
@@ -162,7 +171,11 @@ func (s *usageSalvager) step(c byte) {
 		s.obj = append(s.obj, c)
 		s.trackUsageValue(c)
 		if s.objDepth == 0 {
-			if usage := parseSalvagedUsage(s.obj); usage != nil {
+			parse := parseSalvagedUsage
+			if s.metaInfo {
+				parse = parseSalvagedMetaInfo
+			}
+			if usage := parse(s.obj); usage != nil {
 				s.last = usage
 			}
 			s.state = scanOutsideString
@@ -200,7 +213,8 @@ func (s *usageSalvager) trackUsageValue(c byte) {
 	}
 }
 
-// finish closes the dropped line and returns the last usage object found.
+// finish closes the dropped line and returns the last usage or meta_info
+// object found.
 func (s *usageSalvager) finish() *fwkrequest.Usage {
 	// A usage object cut short by the end of the line cannot be parsed.
 	return s.last
@@ -250,6 +264,27 @@ func parseSalvagedUsage(obj []byte) *fwkrequest.Usage {
 		if f, ok := fields[reqcommon.FieldCacheReadInputTokens].(float64); ok && int(f) != 0 {
 			usage.PromptTokenDetails = &fwkrequest.PromptTokenDetails{CachedTokens: int(f)}
 		}
+	}
+	return usage
+}
+
+// parseSalvagedMetaInfo decodes an SGLang meta_info object, which carries
+// prompt_tokens and completion_tokens like a chat usage block and reports the
+// cache hit as a root cached_tokens count. Like the sglanghttp parser it only
+// trusts the final chunk, the one with a non-null finish_reason, so a dropped
+// intermediate chunk cannot overwrite the final counts with partial ones.
+func parseSalvagedMetaInfo(obj []byte) *fwkrequest.Usage {
+	var fields struct {
+		FinishReason json.RawMessage `json:"finish_reason"`
+		CachedTokens *int            `json:"cached_tokens"`
+	}
+	if err := json.Unmarshal(obj, &fields); err != nil ||
+		len(fields.FinishReason) == 0 || string(fields.FinishReason) == "null" {
+		return nil
+	}
+	usage := parseSalvagedUsage(obj)
+	if usage != nil && usage.PromptTokenDetails == nil && fields.CachedTokens != nil {
+		usage.PromptTokenDetails = &fwkrequest.PromptTokenDetails{CachedTokens: *fields.CachedTokens}
 	}
 	return usage
 }
