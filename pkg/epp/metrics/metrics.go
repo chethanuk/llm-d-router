@@ -101,6 +101,7 @@ func RegisterWithOptions(opts RegisterOptions, customCollectors ...prometheus.Co
 		metrics.Registry.MustRegister(llmdInferencePoolAvgRunningRequests)
 		metrics.Registry.MustRegister(llmdInferencePoolStdDevRunningRequests)
 		metrics.Registry.MustRegister(llmdInferencePoolReadyEndpoints)
+		metrics.Registry.MustRegister(llmdInferencePoolBaseModels)
 		metrics.Registry.MustRegister(llmdSchedulerE2ELatency)
 		metrics.Registry.MustRegister(llmdSchedulerAttemptsTotal)
 		metrics.Registry.MustRegister(llmdSchedulerFilterEliminatedTotal)
@@ -172,6 +173,7 @@ func Reset() {
 	llmdInferencePoolAvgRunningRequests.Reset()
 	llmdInferencePoolStdDevRunningRequests.Reset()
 	llmdInferencePoolReadyEndpoints.Reset()
+	llmdInferencePoolBaseModels.Reset()
 	llmdSchedulerE2ELatency.Reset()
 	llmdSchedulerAttemptsTotal.Reset()
 	llmdSchedulerFilterEliminatedTotal.Reset()
@@ -447,6 +449,11 @@ func RecordInferencePoolStdDevRunningRequests(name string, runningRequests float
 
 func RecordInferencePoolReadyPods(name string, runningPods float64) {
 	llmdInferencePoolReadyEndpoints.WithLabelValues(name).Set(runningPods)
+}
+
+// RecordInferencePoolBaseModels records the number of distinct base models in the pool.
+func RecordInferencePoolBaseModels(name string, count float64) {
+	llmdInferencePoolBaseModels.WithLabelValues(name).Set(count)
 }
 
 // RecordSchedulerE2ELatency records the end-to-end scheduling latency.
