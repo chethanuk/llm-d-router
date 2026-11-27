@@ -824,6 +824,7 @@ The exporter is configured with the standard OpenTelemetry environment variables
 | `OTEL_TRACES_EXPORTER` | `otlp` | `otlp`, `console` (pretty-printed spans on stdout), or `none`. |
 | `OTEL_TRACES_SAMPLER` | `parentbased_traceidratio` | `always_on`, `always_off`, `traceidratio`, `parentbased_always_on`, `parentbased_always_off`, or `parentbased_traceidratio`. |
 | `OTEL_TRACES_SAMPLER_ARG` | `0.1` | Sampling ratio in `[0, 1]` for the `traceidratio` samplers. |
+| `OTEL_TRACES_ENABLED_SCOPES` | unset (all scopes) | Comma-separated instrumentation scopes to trace, such as `llm-d-router/pkg/epp/handlers`. Spans from other scopes are dropped. Their children attach to the nearest enabled ancestor, which can be the remote parent from an incoming `traceparent` header, or start a new trace when there is none. The HTTP server and client spans from `otelhttp` are not filtered. This variable is specific to llm-d-router. |
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | — | Override the service name and add resource attributes such as `k8s.pod.name`. |
 
 ### SSRF Protection

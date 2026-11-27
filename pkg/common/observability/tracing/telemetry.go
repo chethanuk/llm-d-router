@@ -36,6 +36,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/llm-d/llm-d-router/pkg/common/observability/logging"
 	"github.com/llm-d/llm-d-router/version"
@@ -381,6 +382,11 @@ const instrumentationName = "llm-d-router"
 // "llm-d-router". Build version and commit SHA are attached so every span in a
 // trace carries consistent scope metadata.
 //
+// When OTEL_TRACES_ENABLED_SCOPES holds a comma-separated list of scope names, a
+// scope not on the list gets a no-op tracer. Its spans record nothing and carry the
+// parent's span context, so spans from enabled scopes still nest under their
+// nearest enabled ancestor. Unset, empty or separator-only enables every scope.
+//
 // Spans started from a context carrying request attribution are enriched with the
 // attribution pair by the span processor InitTracing installs. See
 // BeginRequestAttribution.
@@ -389,6 +395,9 @@ func Tracer(scope ...string) trace.Tracer {
 	if len(scope) > 0 && scope[0] != "" {
 		name = scope[0]
 	}
+	if !scopeEnabled(name) {
+		return noop.Tracer{}
+	}
 	return otel.Tracer(
 		name,
 		trace.WithInstrumentationVersion(version.BuildRef),
@@ -396,4 +405,21 @@ func Tracer(scope ...string) trace.Tracer {
 			attribute.String("commit-sha", version.CommitSHA),
 		),
 	)
+}
+
+// scopeEnabled reports whether OTEL_TRACES_ENABLED_SCOPES allows the named scope.
+// A list with no non-empty entries counts as unset.
+func scopeEnabled(name string) bool {
+	listed := false
+	for _, entry := range strings.Split(os.Getenv("OTEL_TRACES_ENABLED_SCOPES"), ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if entry == name {
+			return true
+		}
+		listed = true
+	}
+	return !listed
 }
