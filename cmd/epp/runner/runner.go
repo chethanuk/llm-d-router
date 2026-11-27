@@ -187,6 +187,9 @@ import (
 	"github.com/llm-d/llm-d-router/version"
 )
 
+// eppComponentName names the EPP in logs, tracing and the startup build message.
+const eppComponentName = "llm-d-epp"
+
 var (
 	setupLog = ctrl.Log.WithName("setup")
 
@@ -197,7 +200,7 @@ var (
 // NewRunner initializes a new EPP Runner and returns its pointer.
 func NewRunner() *Runner {
 	return &Runner{
-		eppExecutableName:    "GIE",
+		eppExecutableName:    eppComponentName,
 		requestControlConfig: requestcontrol.NewConfig(), // default requestcontrol config has empty plugin list
 		customCollectors:     []prometheus.Collector{},
 	}
@@ -258,7 +261,7 @@ func (r *Runner) WithCustomCollectors(collectors ...prometheus.Collector) *Runne
 func (r *Runner) Run(ctx context.Context) error {
 	// Setup a very basic logger in case command line argument parsing fails
 	// Request handlers log, so a stdout nobody reads must not stall them.
-	logutil.InitSetupLogging("llm-d-epp", logutil.NonBlockingStdout("llm-d-epp"))
+	logutil.InitSetupLogging(eppComponentName, logutil.NonBlockingStdout(eppComponentName))
 	defer logutil.Flush()
 
 	setupLog.Info(r.eppExecutableName+" build", "commit-sha", version.CommitSHA, "build-ref", version.BuildRef)
@@ -292,7 +295,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	tracing.InitTextMapPropagator()
 
 	if opts.Tracing {
-		shutdown, err := tracing.InitTracing(ctx, setupLog, "llm-d-epp")
+		shutdown, err := tracing.InitTracing(ctx, setupLog, eppComponentName)
 		if err != nil {
 			return fmt.Errorf("failed to init tracing %w", err)
 		}
